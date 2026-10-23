@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from jiuwen_memory.retrieval.retriever_impl.pipeline_retriever import apply_threshold
+from jiuwen_memory.retrieval.retriever_impl.pipeline_retriever import (
+    apply_threshold,
+    blend_rerank_scores,
+)
 from jiuwen_memory.retrieval.types import RecallChannel, ScoredUnit
 
 pytestmark = pytest.mark.unit
@@ -139,3 +142,51 @@ def test_absolute_skipped_when_not_calibrated() -> None:
     assert uncalibrated_detail["calibrated"] == "False"
     assert calibrated == [], "校准路径应应用同一个绝对阈值"
     assert calibrated_detail["calibrated"] == "True"
+
+
+def test_non_positive_dropped_by_default() -> None:
+    kept, detail = apply_threshold(_units([0.0, 0.7, 0.0]), 10, calibrated=True)
+
+    assert _ids(kept) == ["u2"], "默认只保留正分候选"
+    assert detail["kept_non_positive"] == "0"
+
+
+def test_keep_non_positive_appends_in_input_order() -> None:
+    kept, detail = apply_threshold(
+        _units([0.0, 0.7, 0.0, 0.2]), 10, calibrated=True, keep_non_positive=True
+    )
+
+    assert _ids(kept) == ["u2", "u4", "u1", "u3"], "非正分续在正分之后，同分保持输入次序"
+    assert detail["kept_non_positive"] == "2"
+    assert detail["dropped"] == "0"
+
+
+def test_keep_non_positive_not_appended_after_threshold_cut() -> None:
+    kept, _ = apply_threshold(
+        _units([0.9, 0.3, 0.0]), 10, calibrated=True, min_score=0.5, keep_non_positive=True
+    )
+
+    assert _ids(kept) == ["u1"], "阈值已截断正分段时不再续非正分"
+
+
+def test_keep_non_positive_when_no_positive() -> None:
+    kept, detail = apply_threshold(
+        _units([0.0, 0.0]), 10, calibrated=True, keep_non_positive=True
+    )
+
+    assert _ids(kept) == ["u1", "u2"], "全为非正分时保留并维持输入次序"
+    assert detail["out"] == "2"
+
+
+def test_blend_mixes_max_normalised_scores() -> None:
+    mixed = blend_rerank_scores([0.0, 0.0, 0.5], [0.03, 0.02, 0.01], 0.5)
+
+    assert mixed[2] > mixed[0] > mixed[1], "精排高分与融合高分都应在混合分中体现"
+    assert mixed[0] == pytest.approx(0.5)
+    assert mixed[2] == pytest.approx(0.5 + 0.5 / 3)
+
+
+def test_blend_side_without_positive_scores_contributes_zero() -> None:
+    mixed = blend_rerank_scores([0.0, 0.0], [0.02, 0.01], 0.25)
+
+    assert mixed == pytest.approx([0.25, 0.125]), "精排全 0 时只剩融合分按权重缩放"

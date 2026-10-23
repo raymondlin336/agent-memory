@@ -788,6 +788,59 @@ def test_min_score_applies_when_reranked() -> None:
     assert threshold.detail["passed"] == "1"
 
 
+def _zero_overlap_retriever(world, **kwargs) -> PipelineRetriever:
+    """u1/u2 精排 0 分（如词重叠为 0），u3 正分；召回/融合次序 u1 > u2 > u3。"""
+    for uid in ["u1", "u2", "u3"]:
+        index_unit(world, make_unit(uid, f"{uid} candidate"))
+    return PipelineRetriever(
+        world.parser,
+        RRFFuser(),
+        world.discloser,
+        world.unit_reader,
+        StaticReranker([0.0, 0.0, 0.5]),
+        domain_store=_storage_for(
+            world,
+            [
+                StaticRecaller(
+                    [
+                        ScoredUnit("u1", 1.0, RecallChannel.KEYWORD),
+                        ScoredUnit("u2", 0.9, RecallChannel.KEYWORD),
+                        ScoredUnit("u3", 0.8, RecallChannel.KEYWORD),
+                    ]
+                )
+            ],
+        ),
+        **kwargs,
+    )
+
+
+def test_zero_rerank_scores_dropped_by_default() -> None:
+    retriever = _zero_overlap_retriever(make_world())
+
+    result = retriever.retrieve(DEFAULT_SCOPE, RetrievalQuery(text="candidate", top_k=3))
+
+    assert [item.unit_id for item in result.items] == ["u3"], "出厂行为：精排 0 分整体砍掉"
+
+
+def test_keep_non_positive_keeps_zero_rerank_scores() -> None:
+    retriever = _zero_overlap_retriever(make_world(), rerank_keep_non_positive=True)
+
+    result = retriever.retrieve(DEFAULT_SCOPE, RetrievalQuery(text="candidate", top_k=3))
+
+    assert [item.unit_id for item in result.items] == ["u3", "u1", "u2"], "0 分候选续在正分之后"
+
+
+def test_rerank_fused_weight_keeps_recall_signal() -> None:
+    retriever = _zero_overlap_retriever(
+        make_world(), rerank_fused_weight=0.5, rerank_keep_non_positive=True
+    )
+
+    result = retriever.retrieve(DEFAULT_SCOPE, RetrievalQuery(text="candidate", top_k=3))
+
+    assert [item.unit_id for item in result.items] == ["u3", "u1", "u2"]
+    assert all(item.score > 0.0 for item in result.items), "混合后融合分让 0 分候选也有正分"
+
+
 def test_min_score_skipped_when_rerank_disabled() -> None:
     world = make_world()
     for uid in ["u1", "u2"]:
