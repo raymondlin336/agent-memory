@@ -102,6 +102,8 @@ class PipelineRetriever(Retriever):
         domain_store: DomainStore,
         schema_temporal_extension: SchemaTemporalPipelineExtension | None = None,
         doc_mode: bool = False,
+        rerank_fused_weight: float = 0.0,
+        rerank_keep_non_positive: bool = False,
     ) -> None:
         self._parser = parser
         self._fuser = fuser
@@ -139,6 +141,12 @@ class PipelineRetriever(Retriever):
         self._min_score_ratio = float(min_score_ratio)
         self._min_score_ratio_uncalibrated = float(min_score_ratio_uncalibrated)
         self._min_results = max(0, int(min_results))
+        # 精排分与融合分混合：0 = 精排分直接替换融合分（出厂行为）；(0, 1] 时两者各按本批最大值
+        # 归一后线性混合，保留召回/融合阶段的相关性信号（词重叠等弱精排器不再独自定序）。
+        self._rerank_fused_weight = min(1.0, max(0.0, float(rerank_fused_weight)))
+        # 阈值是否保留非正分候选：False = 只保留正分（出厂行为）；True 时精排分为 0 的候选
+        # 不被整体砍掉，按分排在正分之后，结果数由 top_k 决定。
+        self._rerank_keep_non_positive = bool(rerank_keep_non_positive)
 
     @property
     def storage(self) -> DomainStore:
@@ -423,6 +431,10 @@ class PipelineRetriever(Retriever):
                 )
                 record_step("rerank", (perf_counter() - t0) * 1000.0, len(survivors), detail=detail)
             else:
+                if self._rerank_fused_weight > 0.0:
+                    scores = blend_rerank_scores(
+                        scores, [su.score for su in survivors], self._rerank_fused_weight
+                    )
                 order = sorted(range(len(survivors)), key=lambda i: scores[i], reverse=True)
                 survivors = [replace(survivors[i], score=scores[i]) for i in order]
                 step(
@@ -468,6 +480,7 @@ class PipelineRetriever(Retriever):
             min_score_ratio=self._min_score_ratio,
             min_score_ratio_uncalibrated=self._min_score_ratio_uncalibrated,
             min_results=self._min_results,
+            keep_non_positive=self._rerank_keep_non_positive,
         )
         step("threshold", t0, n=len(survivors), detail=threshold_detail)
 
@@ -584,6 +597,8 @@ def _build(config):
             discloser,
         ),
         doc_mode=doc_mode,
+        rerank_fused_weight=float(Factory.cfg_get(config, "rerank_fused_weight", 0.0)),
+        rerank_keep_non_positive=bool(Factory.cfg_get(config, "rerank_keep_non_positive", False)),
     )
     retriever.bind_expander(ExpanderProducer.build("default", {"domain_store": domain}, config.ctx))
     retriever.bind_embedder(
@@ -600,6 +615,22 @@ def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
+def blend_rerank_scores(
+    rerank_scores: list[float], fused_scores: list[float], fused_weight: float
+) -> list[float]:
+    """精排分与融合分混合：各自按本批最大正值归一到 [0, 1] 后线性混合。
+
+    ``fused_weight`` 为融合分权重（0 = 纯精排分，1 = 纯融合分）。某一侧本批无正分时其归一值
+    全为 0，结果退化为另一侧按权重缩放，不改变其内部次序。
+    """
+    def _norm(values: list[float]) -> list[float]:
+        top = max((v for v in values if v > 0.0), default=0.0)
+        return [max(v, 0.0) / top if top > 0.0 else 0.0 for v in values]
+
+    r, f = _norm(rerank_scores), _norm(fused_scores)
+    return [(1.0 - fused_weight) * ri + fused_weight * fi for ri, fi in zip(r, f)]
+
+
 def apply_threshold(
     survivors: list[ScoredCandidate],
     top_k: int,
@@ -609,13 +640,23 @@ def apply_threshold(
     min_score_ratio: float = 0.0,
     min_score_ratio_uncalibrated: float = 0.0,
     min_results: int = 0,
+    keep_non_positive: bool = False,
 ) -> tuple[list[ScoredCandidate], dict[str, str]]:
-    """应用统一相关性阈值，返回保留候选与轨迹明细。"""
+    """应用统一相关性阈值，返回保留候选与轨迹明细。
+
+    ``keep_non_positive=False``（默认）只在正分候选中取；True 时非正分候选按分（同分保持输入
+    次序）续在正分之后，但仅当正分段未被绝对/相对阈值截断时才续上。
+    """
     n_in = len(survivors)
     positive = sorted(
         (su for su in survivors if su.score > 0.0),
         key=lambda su: su.score,
         reverse=True,
+    )
+    non_positive = (
+        sorted((su for su in survivors if su.score <= 0.0), key=lambda su: su.score, reverse=True)
+        if keep_non_positive
+        else []
     )
     # 绝对阈值仅在校准（已精排）路径生效；相对阈值分路取不同默认：
     # 校准分较可信取严，未校准 RRF 分聚集取松，避免过度偏好多通道一致。
@@ -629,12 +670,13 @@ def apply_threshold(
         "min_score_ratio": f"{ratio:g}",
     }
     if not positive:
-        return [], {
+        return non_positive, {
             **base_detail,
             "passed": "0",
             "backfilled": "0",
-            "out": "0",
-            "dropped": str(n_in),
+            "kept_non_positive": str(len(non_positive)),
+            "out": str(len(non_positive)),
+            "dropped": str(n_in - len(non_positive)),
         }
 
     max_score = positive[0].score
@@ -657,10 +699,14 @@ def apply_threshold(
     keep_n = max(n_pass, floor)
     kept = positive[:keep_n]
     backfilled = max(0, len(kept) - n_pass)
+    # 非正分只在正分段未被阈值截断时续上：阈值砍掉了低正分，比它更低的非正分自然也不保留。
+    tail = non_positive if n_pass == len(positive) else []
+    kept = kept + tail
     return kept, {
         **base_detail,
         "passed": str(n_pass),
         "backfilled": str(backfilled),
+        "kept_non_positive": str(len(tail)),
         "out": str(len(kept)),
         "dropped": str(n_in - len(kept)),
     }

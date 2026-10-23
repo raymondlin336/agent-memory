@@ -238,6 +238,10 @@ def default_config_dict() -> dict[str, Any]:
                     "schema_temporal_source_top_k": 20,
                     "schema_temporal_source_ratio": 0.3,
                     "schema_temporal_source_max_chars": 1200,
+                    # 精排分与融合分混合权重（0 = 精排分替换融合分）；阈值是否保留精排非正分候选。
+                    # 弱精排器（如词重叠）在非中文语料上会把相关候选打成 0 分，见 F08。
+                    "rerank_fused_weight": 0.0,
+                    "rerank_keep_non_positive": False,
                 },
             }
         },
