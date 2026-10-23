@@ -7,7 +7,7 @@
 | 关联模块 | jiuwen_memory/retrieval/ |
 | 最近一次修订日期 | 2026-10-23 |
 | 关联特性补充 | docs/features/api/F04-memory-metadata-separation.md |
-| 关联特性文档 | docs/features/F01-system-spec-design.md、docs/features/construction/F04-cc-memory-compat.md、docs/features/construction/F05-construction-spec-multimodal-design.md、docs/features/retrieval/F02-retrieval-threshold-topk-design.md、docs/features/retrieval/F03-metadata-filtering.md、docs/features/retrieval/F04-score-max-fusion.md、docs/features/retrieval/F05-storage-retrieval-pipelines.md、docs/features/retrieval/F07-schema-temporal-entity.md、docs/features/retrieval/F08-query-rewrite.md、docs/features/common/F01-memory-layer.md、docs/features/common/F08-memory-tree.md、docs/features/storage/F06-composite-recaller-assembly.md |
+| 关联特性文档 | docs/features/F01-system-spec-design.md、docs/features/construction/F04-cc-memory-compat.md、docs/features/construction/F05-construction-spec-multimodal-design.md、docs/features/retrieval/F02-retrieval-threshold-topk-design.md、docs/features/retrieval/F03-metadata-filtering.md、docs/features/retrieval/F04-score-max-fusion.md、docs/features/retrieval/F05-storage-retrieval-pipelines.md、docs/features/retrieval/F07-schema-temporal-entity.md、docs/features/retrieval/F08-query-rewrite.md、docs/features/common/F01-memory-layer.md、docs/features/common/F08-memory-tree.md、docs/features/storage/F06-composite-recaller-assembly.md、docs/features/retrieval/F09-rerank-score-blend.md |
 
 ## Metadata 检索契约
 
@@ -205,8 +205,9 @@ QueryParser.parse(query) → ParsedQuery
 → Fuser 前物化候选并完成 lifecycle/valid-time/event-time/filters 真源复核
 → Fuser.fuse(parsed_query, candidates) → list[ScoredMemoryUnit]
 → 截断精排预算
-→ 可选 Reranker 以 ParsedQuery.rewritten 精排 → [rollup=True] 祖先准入及 MaxP
-→ 相关性阈值过滤（结果数可 < top_k）→ 截断 top_k
+→ 可选 Reranker 以 ParsedQuery.rewritten 精排（`rerank_fused_weight>0` 时精排分与融合分各按批内最大值归一后混合）
+→ [rollup=True] 祖先准入及 MaxP
+→ 相关性阈值过滤（结果数可 < top_k；默认只保留正分，`rerank_keep_non_positive` 时非正分续在正分之后）→ 截断 top_k
 → Discloser 塑形；若 expand_depth>0，内部准备阶段暂不分配预算、不读后代
 → [展开请求] 最终选根后，共享预算准入根，再执行 Expander + Discloser
 → 统一截断父子返回总数到 top_k
