@@ -5,7 +5,8 @@ memory_api:
   globals:
     vector_enabled: true
     graph_enabled: false
-    rerank_enabled: false
+    # API cross-encoder rerank (best setup in F09).
+    rerank_enabled: true
     layers_index_enabled: true
     embedder_dim: 1024
     chunk_size: 1024
@@ -19,7 +20,8 @@ memory_api:
     embedder_model: "${EMBED_MODEL_NAME}"
     embedder_base_url: "${EMBED_BASE_URL}"
     embedder_api_key: "${EMBED_API_KEY}"
-    embedder_max_batch: 64
+    # DashScope text-embedding-v4 单次请求最多 10 条输入
+    embedder_max_batch: 10
     embedder_ssl_verify: false
 
   llm:
@@ -31,6 +33,17 @@ memory_api:
   tokenizer:
     default:
       target: jieba
+  # Cohere-dialect /rerank endpoint; base_url includes /v1 but not /rerank.
+  # RERANK_MODEL can switch to BAAI/bge-reranker-v2-m3 for comparison.
+  reranker:
+    default:
+      target: api
+      params:
+        reranker_model: "${RERANK_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
+        reranker_base_url: "${RERANK_BASE_URL}"
+        reranker_api_key: "${RERANK_API_KEY}"
+        reranker_timeout: 30.0
+        reranker_dialect: cohere
 
   # Use the official Mem2.0 extractor without task-specific construction or
   # retrieval changes. This file is evaluation-only wiring.
@@ -99,9 +112,9 @@ memory_api:
         collection: "${MEM2_MILVUS_COLLECTION:-longmemeval_0804_vectors}"
         dim: 1024
         # pymilvus 3.0 / Milvus Lite returns COSINE *distance* (0 is identical),
-        # while Mem2.0 treats vector scores as higher-is-better.  BGE-M3 emits
-        # L2-normalized vectors, so IP preserves cosine ordering and score
-        # direction without adding any query-time work.
+        # while Mem2.0 treats vector scores as higher-is-better.  IP equals
+        # cosine only for L2-normalized vectors (true for BGE-M3; verify for
+        # text-embedding-v4 before trusting vector scores).
         metric_type: IP
     layers_l0:
       target: milvus
@@ -159,9 +172,13 @@ memory_api:
         kv_store: default
         over_fetch_factor: 4
         over_fetch_floor: 60
-        recall_max: 200
-        rerank_max: 50
+        # F09 / lme_kit preset ce_cap300: rerank up to 300 candidates, no
+        # fused-score blend. The local embed_serve.py returns sigmoid scores
+        # (all positive), so rerank_keep_non_positive is not needed.
+        recall_max: 300
+        rerank_max: 300
         min_score: 0.0
         min_score_ratio: 0.0
         min_score_ratio_uncalibrated: 0.0
         min_results: 0
+        rerank_fused_weight: 0.0

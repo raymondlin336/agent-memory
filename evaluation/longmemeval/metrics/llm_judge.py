@@ -123,7 +123,13 @@ def _parse_longmemeval_correct(content: str) -> bool | None:
     text = (content or "").strip().lower()
     marker = "</judge_thinking>"
     if marker in text:
-        text = text.rsplit(marker, 1)[1].strip()
+        thinking, text = text.rsplit(marker, 1)
+        text = text.strip()
+        if not text:
+            # gpt-4o-mini 有时把结论写进 thinking 块内（"Final verdict: yes\n</judge_thinking>"），
+            # 块后为空；此时取块内最后一个 final verdict，避免判成 None 记 0 分。
+            verdicts = re.findall(r"final verdict\s*:\s*\**\s*(yes|no)\b", thinking)
+            return verdicts[-1] == "yes" if verdicts else None
     verdict = text.strip("`*_ .!?\t\n\r")
     if verdict == "yes":
         return True

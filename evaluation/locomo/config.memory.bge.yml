@@ -1,0 +1,11 @@
+# 临时：DashScope text-embedding-v4 key 到位前的本地替身。继承无 docker 内存模式，仅把
+# embedding 换成本地 embed_serve.py（:8906）的 BAAI/bge-small-en-v1.5（384 维）；LLM 与精排不变。
+# 分数不代表 AML 口径，只用于联调与查错；拿到 key 后改回 config.memory.yml。
+extends: config.memory.yml
+memory_api:
+  globals:
+    embedder_model: BAAI/bge-small-en-v1.5
+    embedder_base_url: http://127.0.0.1:8906/v1
+    embedder_api_key: local
+    embedder_dim: 384
+    embedder_max_batch: 32

@@ -1,0 +1,4 @@
+# 无 docker 本地模式：继承 config.yml，去掉 Redis/ES/Milvus 存储段，回落内核默认的内存存储
+# （对齐 lme_kit 单机 Windows 跑法）。数据只活在本进程内，跑完即丢。
+extends: config.yml
+drop_memory_api: [kv_store, fulltext_store, vector_store]

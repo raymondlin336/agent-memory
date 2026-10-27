@@ -1,6 +1,10 @@
-# agent-memory 本地无 docker 评测配置（参考 locomo.md，对齐华为云 MaaS）。
+# agent-memory 本地无 docker 评测配置（参考 locomo.md）。
 #
-# 选型：LLM/Embedding 走华为云 MaaS（OpenAI 兼容，DeepSeek-V3.2 + bge-m3）+ 本地 Redis 真源 +
+# AML 开源赛道模型约束：LLM 必须 gpt-4o-mini（OpenAI / OpenRouter），Embedding 必须
+# text-embedding-v4（DashScope OpenAI 兼容端点，默认 1024 维）；reranker 不受限。
+# 模型经 environment/.env 注入；基线（DeepSeek-V3.2 + bge-m3）见 tag reranker-fix-baseline。
+#
+# 选型：LLM/Embedding 走 OpenAI 兼容端点 + 本地 Redis 真源 +
 # 本地 Elasticsearch 关键词召回 + 远程 Milvus 向量召回。召回走「向量 + 关键词」双路，关闭图，
 # 启用 SiliconFlow bge-reranker-v2-m3 精排（融合后、截断 top_k 前重排）。
 #
@@ -24,14 +28,14 @@ memory_api:
   globals:
     vector_enabled: true        # 向量索引 + 向量召回路（Milvus）
     graph_enabled: false        # 不启用图召回路
-    rerank_enabled: false       # 关闭精排（测无 rerank 基线；pipeline_retriever 据此短路 reranker=None）
+    rerank_enabled: true        # 开启精排：api cross-encoder（F09 验证最优）
     layers_index_enabled: false  # L0/L1 分层召回（构建/召回侧默认均 true）
 
-    # bge-m3 dense 维度 = 1024，必须与 Milvus collection 的 dim 一致
+    # text-embedding-v4 按 dimensions=1024 输出，必须与 Milvus collection 的 dim 一致
     embedder_dim: 1024
     chunk_size: 512
 
-    # —— LLM：华为云 MaaS OpenAI 兼容端点（DeepSeek-V3.2）——
+    # —— LLM：OpenAI 兼容端点（gpt-4o-mini）——
     # openai producer 读 llm_model/llm_base_url/llm_api_key/llm_temperature/llm_max_tokens
     llm_model: "${MODEL_NAME}"
     llm_base_url: "${API_BASE}"
@@ -39,13 +43,14 @@ memory_api:
     llm_temperature: 0.01
     llm_max_tokens: 4096
 
-    # —— 嵌入：华为云 MaaS bge-m3（OpenAI 兼容 /v1/embeddings）——
+    # —— 嵌入：DashScope text-embedding-v4（OpenAI 兼容 /compatible-mode/v1/embeddings）——
     # openai embedder 读 embedder_model/embedder_base_url/embedder_api_key/embedder_dim/embedder_max_batch
     # base_url 须不含 /embeddings（OpenAI SDK 自拼），故引用无后缀的 EMBED_BASE_URL
     embedder_model: "${EMBED_MODEL_NAME}"
     embedder_base_url: "${EMBED_BASE_URL}"
     embedder_api_key: "${EMBED_API_KEY}"
-    embedder_max_batch: 64
+    # text-embedding-v4 单次请求最多 10 条输入
+    embedder_max_batch: 10
 
   # ---- 共享插件 ----
   llm:
@@ -55,14 +60,15 @@ memory_api:
     default: { target: openai }
   tokenizer:
     default: { target: jieba }   # 对齐 docker online：中文分词用 jieba（已装）
-  # 精排：SiliconFlow bge-reranker-v2-m3（cohere 方言）。base_url 含 /v1、不含 /rerank，
+  # 精排：cross-encoder/ms-marco-MiniLM-L-6-v2（F09 检索重放最优；cohere 方言），
+  # 可经 RERANK_MODEL 换 BAAI/bge-reranker-v2-m3 做对比。base_url 含 /v1、不含 /rerank，
   # APIReranker 按方言拼 base_url+"/rerank"；填成完整端点会得到 /v1/rerank/rerank。
-  # reranker 走独立 SiliconFlow key（不与 embedding 同源），故读 RERANK_API_KEY 而非 EMBED_API_KEY。
+  # reranker 走独立 key（不与 embedding 同源），故读 RERANK_API_KEY 而非 EMBED_API_KEY。
   reranker:
     default:
       target: api
       params:
-        reranker_model: BAAI/bge-reranker-v2-m3
+        reranker_model: "${RERANK_MODEL:-cross-encoder/ms-marco-MiniLM-L-6-v2}"
         reranker_base_url: "${RERANK_BASE_URL}"
         reranker_api_key: "${RERANK_API_KEY}"
         reranker_timeout: 30.0
@@ -182,14 +188,14 @@ memory_api:
   # 不写本段时走 src/config/defaults.py 出厂值，其中 min_score_ratio=0.6、
   # min_score_ratio_uncalibrated=0.3，未精排路径判据为 score < ratio × max_score 则丢弃：
   # RRF 最高分约 0.0328，阈值 0.00984 会砍掉「单通道命中且通道内名次 > 40」的候选。
-  # 本配置 rerank_enabled=false：不走精排，走未校准路径（min_score_ratio_uncalibrated）；
-  # 三者均显式置 0，让融合结果不经阈值再砍，对齐基线口径（全部召回结果进 prompt）。
+  # 本配置 rerank_enabled=true：走校准路径（min_score / min_score_ratio）；
+  # 三者均显式置 0，让精排结果不经阈值再砍（全部召回结果进 prompt）。
+  # 精排按 F09 结论（对齐 lme_kit 预设 ce_cap300）：不混融合分（rerank_fused_weight=0）；
+  # 本地 embed_serve.py 返回 sigmoid 分（0..1 全为正），故无需 rerank_keep_non_positive。
   # 注：实例级覆盖会整体替换 params，故须写全依赖拓扑，漏写会掉回内核默认值。
-  # 容量四参数：recall_max=200 双路每路召回预算（对齐 mem0 beam benchmark 召回 200），
-  # rerank_max=50 精排封顶（无 rerank 时不生效，保留无害），top_k 由 RUN 时给定（默认 200，对齐 mem0 召回口径）。
-  # 每路实际召回宽度 = max(top_k*over_fetch_factor, over_fetch_floor)，被 recall_max 封顶 → 每路 200。
-  # 融合后最多保留 top_k=200 形成候选池；评测再按 10/20/50/200 cutoff 切片进入 prompt。
-  # 因此本阶段 budget_n=max(rerank_max, top_k)=200，而不是早期注释中的 100。
+  # 容量参数：recall_max=300 双路每路召回预算、rerank_max=300 精排封顶（F09「cap 300」行），
+  # top_k 由 RUN 时给定（默认 200）。每路实际召回宽度 = max(top_k*over_fetch_factor, over_fetch_floor)，
+  # 被 recall_max 封顶；budget_n=max(rerank_max, top_k)=300 条进入精排。
   retriever:
     default:
       target: pipeline
@@ -204,9 +210,10 @@ memory_api:
         storage: default      # 点读真源（recheck）：composite → kv 部分 = Redis
         over_fetch_factor: 4
         over_fetch_floor: 60
-        recall_max: 200
-        rerank_max: 50
+        recall_max: 300
+        rerank_max: 300
         min_score: 0.0
         min_score_ratio: 0.0
         min_score_ratio_uncalibrated: 0.0
         min_results: 0
+        rerank_fused_weight: 0.0

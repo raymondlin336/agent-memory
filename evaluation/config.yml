@@ -2,31 +2,40 @@
 benchmark: longmemeval
 
 longmemeval:
-  data: datasets/longmemeval/longmemeval_mini.json
-  memory_config: longmemeval/config.yml
+  # shared40：oracle 证据会话 + 每题 5 个 S 填充会话（与 longmem-bench II 轮同输入，本地生成、不入库）。
+  data: datasets/longmemeval/shared40.json
+  # config.memory.yml = 无 docker 内存存储；改回 config.yml 即用 Redis/ES/Milvus（需先起 docker）。
+  # 无 DashScope key 时可临时用 config.memory.bge.yml（本地 bge-small 替身 embedding）。
+  memory_config: longmemeval/config.memory.yml
   output_root: outputs/longmemeval
   # question_ids 非空时优先按题号选择；否则使用 sample_indices。
-  question_ids: []
+  # 当前：shared40 的 9 道 IE 题（single-session-user ×6 + single-session-preference ×3）。
+  question_ids: [0a34ad58, 1d4e3b97, b0479f84, 37d43f65, 8ebdbe50, c5e8278d, 4100d0a0, e01b8e2f, 8550ddae]
   sample_indices: [0]
-  max_questions: 1
-  concurrency: 1
+  max_questions: 9
+  # 题间并行（每题内按序写入）；LLM 并发另由 LONGMEMEVAL_CHAT_CONCURRENCY 封顶。
+  concurrency: 9
   # 运行时自动追加唯一 run_id；复用 Redis/ES/Milvus 也不会读取旧评测数据。
-  scope_org: longmemeval-0804-local-smoke
+  scope_org: longmemeval-shared40-local
   # 默认保留本轮后端数据用于 bad case/evidence 溯源；改为 true 才在成功测评后清理。
   cleanup_after_run: false
   granularity: dialogue_turn
   dialogue_turn_max_chars: 4096
-  oracle_sessions: true
+  # shared40 自带填充会话，必须写入完整 haystack（true 会只写证据会话）。
+  oracle_sessions: false
   infer: true
   recall_top_k: 200
-  answer_cutoff: 50
-  answer_cutoffs: [50, 10, 20]
+  answer_cutoff: 30
+  # 30 对齐 II 轮注入块（JW 约 26-30 条）。
+  answer_cutoffs: [30, 10, 20, 50]
   judge_strict: false
   proxy_retry_attempts: 4
 
 locomo:
   data: datasets/locomo/locomo_mini.json
-  memory_config: locomo/config.yml
+  # config.memory.yml = 无 docker 内存存储；改回 config.yml 即用 Redis/ES/Milvus（需先起 docker）。
+  # 临时用 config.memory.bge.yml（本地 bge-small 替身 embedding），DashScope key 到位后改回 config.memory.yml。
+  memory_config: locomo/config.memory.bge.yml
   output_root: outputs/locomo
   conversation_ids: [0]
   max_sessions: 0

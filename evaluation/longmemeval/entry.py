@@ -91,6 +91,7 @@ def _proxy_command(
     ]
     if disable_thinking:
         command.append("--disable-thinking")
+    if category == "extract":
         command.extend(["--max-output-tokens", "4096"])
     else:
         command.extend(
@@ -201,8 +202,13 @@ def main(argv: list[str] | None = None) -> int:
         processes.append(embed_process)
         _wait_ready(embed_process, embed_port, embed_log_path)
 
+        # GLM 抽取需关思维链；OpenAI gpt-4o-mini 等不认 thinking/enable_thinking 字段，
+        # 须置 LONGMEMEVAL_EXTRACT_DISABLE_THINKING=0，否则上游返回 400。
+        extract_disable_thinking = os.getenv(
+            "LONGMEMEVAL_EXTRACT_DISABLE_THINKING", "1"
+        ).strip().lower() not in ("0", "false", "no", "")
         for category, port, disable_thinking in (
-            ("extract", extract_port, True),
+            ("extract", extract_port, extract_disable_thinking),
             ("answer_judge", qa_port, False),
         ):
             log_path = output_dir / f"{category}_proxy.log"

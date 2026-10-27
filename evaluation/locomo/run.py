@@ -79,11 +79,10 @@ from jiuwen_memory.api import (  # noqa: E402
     DeleteSelector,
     MemoryAPI,
     assemble_runtime,
+    build_dev_authenticator,
+    internal_context,
 )
-from jiuwen_memory.common.security.types import (  # noqa: E402
-    AuthContext,
-    RequestSecurityContext,
-)
+from jiuwen_memory.common.security.types import RequestSecurityContext  # noqa: E402
 from jiuwen_memory.common.type_def import ChatMessage, Context, Scope  # noqa: E402
 from jiuwen_memory.config import Config  # noqa: E402
 from jiuwen_memory.retrieval.types import DisclosureLevel  # noqa: E402
@@ -775,8 +774,14 @@ def _conversation_scope(conv_id: int) -> Scope:
     return Scope(org=SCOPE_ORG, user=f"conv_{conv_id}")
 
 
-def _scope_security(scope: Scope) -> RequestSecurityContext:
-    return RequestSecurityContext(auth=AuthContext(actor=scope))
+# 本地评测是受控 composition root（对齐 longmemeval/harness.py）：身份由 dev authenticator
+# 产出，数据集 scope 只作目标。F05 起自建 AuthContext(actor=scope) 不再受信，读写一律被拒。
+_AUTHENTICATOR = build_dev_authenticator()
+
+
+def _scope_security(_scope: Scope) -> RequestSecurityContext:
+    """每次调用生成新上下文，不从数据集目标推导 actor。"""
+    return internal_context(_AUTHENTICATOR)
 
 
 def _list_scope_units(api: MemoryAPI, scope: Scope) -> list:
@@ -834,10 +839,13 @@ class ConversationProcessor:
         self.llm = llm  # 共享 OpenAILLM 实例（chat 已被 patch 记 token）
         # 正常运行使用唯一 Scope；SKIP_WRITE 只有显式指定旧 SCOPE_TAG 才允许复用。
         self.scope = _conversation_scope(conv_id)
-        self.identity = self.scope  # 本人操作本人 scope
-        # F05 重构后 add/search/inspect 用 security 上下文，从 auth.actor 取 identity
-        self.security = _scope_security(self.identity)
+        self.identity = self.scope
         self._write_seq = 0  # conv 内 write 递增序号（对齐 staged ingest 的 write_id）
+
+    @property
+    def security(self) -> RequestSecurityContext:
+        """add/search/inspect 用的受信上下文；每次取新的，避免长跑中上下文过期。"""
+        return _scope_security(self.scope)
 
     def _write_raw(self, content: str, sk: str, metadata: dict, occurred):
         """按引擎默认路径写原文：system_metadata 去掉 infer 键后 Engine.write 走 classifier 打

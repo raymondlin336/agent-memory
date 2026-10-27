@@ -32,7 +32,11 @@ def expand_env(obj):
 
 
 def load_layer(path: str) -> dict:
-    """读一层配置文件：``.yml/.yaml`` 走 YAML，其余按 JSON；读后做环境变量展开。"""
+    """读一层配置文件：``.yml/.yaml`` 走 YAML，其余按 JSON；读后做环境变量展开。
+
+    可选继承：顶层 ``extends`` 指向基础配置（相对本文件），``drop_memory_api`` 列出要从基础
+    ``memory_api`` 删掉的命名空间（回落内核默认，如内存存储），其余键递归覆盖到基础之上。
+    """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     if path.endswith((".yml", ".yaml")):
@@ -41,4 +45,22 @@ def load_layer(path: str) -> dict:
         data = yaml.safe_load(text) or {}
     else:
         data = json.loads(text) if text.strip() else {}
+    base_ref = data.pop("extends", None)
+    drop = data.pop("drop_memory_api", None) or []
+    if base_ref:
+        base = load_layer(os.path.join(os.path.dirname(os.path.abspath(path)), base_ref))
+        for namespace in drop:
+            base.get("memory_api", {}).pop(namespace, None)
+        return _merge(base, expand_env(data))
     return expand_env(data)
+
+
+def _merge(base: dict, override: dict) -> dict:
+    """递归合并：映射逐键合并，其余值由 ``override`` 整体替换。"""
+    merged = dict(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged

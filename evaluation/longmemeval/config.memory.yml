@@ -1,0 +1,5 @@
+# No-Docker local mode: inherits config.yml without the Redis/ES/Milvus store
+# sections, so the kernel falls back to its in-memory stores (the lme_kit
+# single-PC setup). Data lives only inside the running process.
+extends: config.yml
+drop_memory_api: [kv_store, fulltext_store, vector_store]

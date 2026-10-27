@@ -1,0 +1,11 @@
+# Temporary stand-in until the DashScope text-embedding-v4 key arrives. Inherits
+# the no-Docker in-memory mode and only swaps embeddings to the local
+# embed_serve.py (:8906) BAAI/bge-small-en-v1.5 (384-dim); LLM and rerank stay.
+# Scores are not AML-comparable; switch back to config.memory.yml once the key works.
+# The LongMemEval launcher also needs LONGMEMEVAL_EMBED_UPSTREAM_URL pointed at
+# http://127.0.0.1:8906/v1/embeddings and LONGMEMEVAL_EMBED_DIMENSION=384.
+extends: config.memory.yml
+memory_api:
+  globals:
+    embedder_dim: 384
+    embedder_max_batch: 32
