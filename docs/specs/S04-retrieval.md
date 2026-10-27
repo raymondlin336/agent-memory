@@ -5,9 +5,9 @@
 | 项 | 值 |
 |---|---|
 | 关联模块 | jiuwen_memory/retrieval/ |
-| 最近一次修订日期 | 2026-10-23 |
+| 最近一次修订日期 | 2026-10-26 |
 | 关联特性补充 | docs/features/api/F04-memory-metadata-separation.md |
-| 关联特性文档 | docs/features/F01-system-spec-design.md、docs/features/construction/F04-cc-memory-compat.md、docs/features/construction/F05-construction-spec-multimodal-design.md、docs/features/retrieval/F02-retrieval-threshold-topk-design.md、docs/features/retrieval/F03-metadata-filtering.md、docs/features/retrieval/F04-score-max-fusion.md、docs/features/retrieval/F05-storage-retrieval-pipelines.md、docs/features/retrieval/F07-schema-temporal-entity.md、docs/features/retrieval/F08-query-rewrite.md、docs/features/common/F01-memory-layer.md、docs/features/common/F08-memory-tree.md、docs/features/storage/F06-composite-recaller-assembly.md |
+| 关联特性文档 | docs/features/F01-system-spec-design.md、docs/features/construction/F04-cc-memory-compat.md、docs/features/construction/F05-construction-spec-multimodal-design.md、docs/features/retrieval/F02-retrieval-threshold-topk-design.md、docs/features/retrieval/F03-metadata-filtering.md、docs/features/retrieval/F04-score-max-fusion.md、docs/features/retrieval/F05-storage-retrieval-pipelines.md、docs/features/retrieval/F07-schema-temporal-entity.md、docs/features/retrieval/F08-query-rewrite.md、docs/features/retrieval/F11-english-time-window.md、docs/features/common/F01-memory-layer.md、docs/features/common/F08-memory-tree.md、docs/features/storage/F06-composite-recaller-assembly.md |
 
 ## Metadata 检索契约
 
@@ -360,6 +360,11 @@ metadata 比较保留 JSON 原生类型。查询侧不做 string / number / bool
 `time_from/to` 不下推——属性问不是事件时间检索，误下推会放大 `t_event=None`
 派生的误伤。`time_parse` 入口对此类 query 直接返回 `(None, None)`。
 
+中文规则未命中后，`time_rules_en=true` 时再试英文规则（相对时间以当前时间为锚）。
+
+`time_window_dates=event_or_message` 时窗不下推（索引只投影 t_event），由召回后真源复核按
+「t_event 或 t_message 落窗」判定（naive 时间按 UTC 归一，不放行）。见 F11。
+
 ### Fuser（`fuser.py`）
 
 | 方法 | 签名 | 语义 |
@@ -431,6 +436,7 @@ metadata 比较保留 JSON 原生类型。查询侧不做 string / number / bool
 | `as_of` | datetime \| None | valid-time 回溯 |
 | `time_from` | datetime \| None | event-time 下界 |
 | `time_to` | datetime \| None | event-time 上界 |
+| `time_window_dates` | str | 事件窗判定时间：`event`（仅 t_event，默认）\| `event_or_message`（t_event 或 t_message），由 Retriever 按配置写入 |
 | `channels` | list[RecallChannel] | 建议启用的通道 |
 | `include_archived` | bool | 当前态真源复核是否允许 archived |
 | `extensions` | dict[str, Any] | 透传配置 |
