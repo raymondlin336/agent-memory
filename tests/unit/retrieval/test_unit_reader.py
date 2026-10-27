@@ -451,3 +451,30 @@ def test_unit_reader_load_skips_undecodable_record(scope, unit_factory) -> None:
 
     assert set(loaded) == {"good"}, "坏记录不阻断检索正排物化"
     assert loaded["good"].content == "one"
+
+
+def test_event_window_event_or_message_dates(unit_factory) -> None:
+    # 抽取把「截至 6/15 的三个月里…」的事件时间记成区间起点 3/15，陈述时间 6/15 在窗内。
+    unit = unit_factory(
+        "said",
+        "x",
+        t_event=datetime(2026, 3, 15, tzinfo=UTC),
+        t_message=datetime(2026, 6, 15, 17, tzinfo=UTC),
+    )
+    window = (NOW - timedelta(days=30), NOW + timedelta(days=1))
+    assert not in_event_window(unit, *window), "event 模式只看 t_event"
+    assert in_event_window(unit, *window, "event_or_message"), "陈述时间落窗即命中"
+
+
+def test_event_window_event_or_message_reads_naive_as_utc(unit_factory) -> None:
+    # 该模式下窗不下推索引，复核是唯一判定点：naive 时间按 UTC 归一，不再一律放行。
+    window = (NOW - timedelta(days=1), NOW + timedelta(days=1))
+    outside = unit_factory("out", "x", t_event=datetime(2026, 3, 15))
+    inside = unit_factory("in", "x", t_message=datetime(2026, 6, 16, 9))
+    assert not in_event_window(outside, *window, "event_or_message")
+    assert in_event_window(inside, *window, "event_or_message")
+
+
+def test_event_window_event_or_message_unknown_passes(unit_factory) -> None:
+    window = (NOW - timedelta(days=1), NOW)
+    assert in_event_window(unit_factory("n", "x"), *window, "event_or_message")

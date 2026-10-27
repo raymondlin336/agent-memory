@@ -129,3 +129,51 @@ def test_year_insertion_form_resolves_explicit_year() -> None:
 
     assert lo == datetime(2025, 6, 8, tzinfo=UTC)
     assert hi == datetime(2025, 6, 9, tzinfo=UTC)
+
+
+# -- 英文规则（english=True）----------------------------------------------- #
+
+EN_NOW = datetime(2023, 3, 25, 18, 4, tzinfo=UTC)  # Saturday
+
+
+def _utc(y: int, m: int, d: int) -> datetime:
+    return datetime(y, m, d, tzinfo=UTC)
+
+
+def test_english_rules_off_by_default() -> None:
+    assert parse_time("What did I buy 10 days ago?", now=EN_NOW) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("text", "window"),
+    [
+        ("What kitchen appliance did I buy 10 days ago?", (_utc(2023, 3, 13), _utc(2023, 3, 18))),
+        ("What did I watch a week ago?", (_utc(2023, 3, 17), _utc(2023, 3, 20))),
+        ("How many films in the last 3 months?", (_utc(2022, 12, 24), _utc(2023, 3, 26))),
+        ("What did I eat yesterday?", (_utc(2023, 3, 24), _utc(2023, 3, 26))),
+        ("What did I do the day before yesterday?", (_utc(2023, 3, 23), _utc(2023, 3, 25))),
+        ("Which artist did I hear last Friday?", (_utc(2023, 3, 23), _utc(2023, 3, 26))),
+        ("Dinner parties in the past month?", (_utc(2023, 2, 1), _utc(2023, 3, 26))),
+        ("Events earlier this year?", (_utc(2023, 1, 1), _utc(2023, 3, 26))),
+        ("What did I plant in March?", (_utc(2023, 3, 1), _utc(2023, 4, 1))),
+        ("Where did I go in December?", (_utc(2022, 12, 1), _utc(2023, 1, 1))),
+    ],
+)
+def test_english_rules_anchor_on_now(text: str, window: tuple[datetime, datetime]) -> None:
+    assert parse_time(text, now=EN_NOW, english=True) == window, text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "How many days ago did I attend the networking event?",
+        "What time do I wake up on Saturday mornings?",
+        "Which happened first, the cough or the skin tag removal?",
+    ],
+)
+def test_english_rules_ignore_non_window_questions(text: str) -> None:
+    assert parse_time(text, now=EN_NOW, english=True) == (None, None), text
+
+
+def test_chinese_rules_take_precedence_over_english() -> None:
+    assert parse_time("昨天 10 days ago", now=NOW, english=True) == parse_time("昨天", now=NOW)
