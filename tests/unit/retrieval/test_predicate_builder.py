@@ -121,3 +121,14 @@ def test_no_time_window_emits_no_or_group() -> None:
     """无 time_from / time_to 时不应构造 OR 组——只返回 lifecycle/as_of clauses。"""
     clauses = build_system_filters(None, None, None)
     assert not any(isinstance(c, FilterGroup) for c in clauses)
+
+
+def test_event_or_message_window_is_not_pushed_down() -> None:
+    # 索引只投影 t_event，表达不了「t_event 或 t_message 落窗」：窗留给召回后真源复核。
+    from datetime import timedelta
+
+    clauses = build_system_filters(
+        None, NOW, NOW + timedelta(days=1), time_dates="event_or_message"
+    )
+
+    assert not [c for c in clauses if isinstance(c, FilterGroup)], "不应下推事件窗"

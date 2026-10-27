@@ -188,6 +188,8 @@ def default_config_dict() -> dict[str, Any]:
                     "sanitize_enabled": True,
                     "sanitize_strip_code": False,
                     "rewrite_enabled": False,
+                    # 中文规则未命中后再试英文相对时间规则，见 F11。
+                    "time_rules_en": False,
                 },
             }
         },
@@ -242,6 +244,9 @@ def default_config_dict() -> dict[str, Any]:
                     # 弱精排器（如词重叠）在非中文语料上会把相关候选打成 0 分，见 F09。
                     "rerank_fused_weight": 0.0,
                     "rerank_keep_non_positive": False,
+                    # 事件窗判定时间：event（仅 t_event）| event_or_message
+                    # （t_event 或 t_message 任一落窗），见 F11。
+                    "time_window_dates": "event",
                 },
             }
         },

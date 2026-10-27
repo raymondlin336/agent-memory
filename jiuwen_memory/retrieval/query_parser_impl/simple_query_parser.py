@@ -144,6 +144,7 @@ class SimpleQueryParser(QueryParser):
         sanitize: bool = False,
         strip_code_fences: bool = False,
         rewrite_enabled: bool = False,
+        time_rules_en: bool = False,
     ) -> None:
         self._tokenizer = tokenizer
         self._embedder = embedder
@@ -152,6 +153,8 @@ class SimpleQueryParser(QueryParser):
         self._sanitize = sanitize
         self._strip_code_fences = strip_code_fences
         self._rewrite_enabled = rewrite_enabled
+        # 时间解析：中文规则未命中后再试英文规则。
+        self._time_rules_en = time_rules_en
 
     def operator_type(self) -> RetrievalOperatorType:
         return RetrievalOperatorType.QUERY_PARSER
@@ -240,7 +243,7 @@ class SimpleQueryParser(QueryParser):
             channels.append(RecallChannel.ENTITY)
 
         # 时间约束解析（event-time 窗口）：规则版，留 LLM 钩子（默认不启用）。
-        time_from, time_to = parse_time(text)
+        time_from, time_to = parse_time(text, english=self._time_rules_en)
 
         return ParsedQuery(
             raw=text,
@@ -282,4 +285,5 @@ def _build(config):
         sanitize=Factory.cfg_get(config, "sanitize_enabled", True),
         strip_code_fences=Factory.cfg_get(config, "sanitize_strip_code", False),
         rewrite_enabled=Factory.cfg_get(config, "rewrite_enabled", False),
+        time_rules_en=bool(Factory.cfg_get(config, "time_rules_en", False)),
     )

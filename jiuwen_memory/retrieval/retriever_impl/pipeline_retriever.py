@@ -104,6 +104,7 @@ class PipelineRetriever(Retriever):
         doc_mode: bool = False,
         rerank_fused_weight: float = 0.0,
         rerank_keep_non_positive: bool = False,
+        time_window_dates: str = "event",
     ) -> None:
         self._parser = parser
         self._fuser = fuser
@@ -147,6 +148,12 @@ class PipelineRetriever(Retriever):
         # 阈值是否保留非正分候选：False = 只保留正分（出厂行为）；True 时精排分为 0 的候选
         # 不被整体砍掉，按分排在正分之后，结果数由 top_k 决定。
         self._rerank_keep_non_positive = bool(rerank_keep_non_positive)
+        # 事件窗判定所用时间：event = 仅 t_event（出厂）；event_or_message = t_event 或 t_message。
+        if time_window_dates not in ("event", "event_or_message"):
+            raise ValidationError(
+                f"time_window_dates must be event|event_or_message, got {time_window_dates!r}"
+            )
+        self._time_window_dates = time_window_dates
 
     @property
     def storage(self) -> DomainStore:
@@ -264,6 +271,7 @@ class PipelineRetriever(Retriever):
         parsed.extensions = dict(query.extensions)
         if query.rollup and query.as_of is not None:
             parsed.as_of = query.as_of
+        parsed.time_window_dates = self._time_window_dates
         parse_detail = {"rewrite": parsed.rewrite_status}
         if parsed.rewrite_fallback_reason:
             parse_detail["fallback_reason"] = parsed.rewrite_fallback_reason
@@ -282,7 +290,11 @@ class PipelineRetriever(Retriever):
         # [3a] 前置谓词：系统谓词（lifecycle×as_of / 时间窗）与用户表达式 AND 外包一同下推。
         #      用户表达式作整体 child——绝不摊平，防其 OR 稀释 lifecycle 等安全谓词。
         sys_filters = build_hierarchy_filters(candidate_hierarchy) + build_system_filters(
-            parsed.as_of, parsed.time_from, parsed.time_to, query.include_archived
+            parsed.as_of,
+            parsed.time_from,
+            parsed.time_to,
+            query.include_archived,
+            time_dates=self._time_window_dates,
         )
         user_filters = parsed.scalar_filters  # parser 已 normalize 的用户表达式（供 §6 复核）
         if query.rollup:
@@ -599,6 +611,7 @@ def _build(config):
         doc_mode=doc_mode,
         rerank_fused_weight=float(Factory.cfg_get(config, "rerank_fused_weight", 0.0)),
         rerank_keep_non_positive=bool(Factory.cfg_get(config, "rerank_keep_non_positive", False)),
+        time_window_dates=str(Factory.cfg_get(config, "time_window_dates", "event")),
     )
     retriever.bind_expander(ExpanderProducer.build("default", {"domain_store": domain}, config.ctx))
     retriever.bind_embedder(

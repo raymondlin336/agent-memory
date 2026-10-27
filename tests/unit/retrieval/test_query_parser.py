@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -531,3 +531,20 @@ def test_rewrite_rejects_output_longer_than_long_raw() -> None:
     assert parsed.rewritten == raw, "超过动态上限的改写应回退 raw query"
     assert parsed.rewrite_status == "fallback", "超过动态上限时状态应为 fallback"
     assert parsed.rewrite_fallback_reason == "output_too_long", "原因应为 output_too_long"
+
+
+def test_parser_english_rules_resolve_against_now() -> None:
+    parser = SimpleQueryParser(WhitespaceTokenizer(), time_rules_en=True)
+    today = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    parsed = parser.parse(RetrievalQuery(text="what did I buy 10 days ago"))
+
+    assert parsed.time_from == today - timedelta(days=12)
+    assert parsed.time_to == today - timedelta(days=7)
+
+
+def test_parser_english_rules_off_by_default() -> None:
+    parser = SimpleQueryParser(WhitespaceTokenizer())
+    parsed = parser.parse(RetrievalQuery(text="what did I buy 10 days ago"))
+
+    assert (parsed.time_from, parsed.time_to) == (None, None), "出厂只解析中文时间表述"
