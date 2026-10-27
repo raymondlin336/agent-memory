@@ -60,16 +60,21 @@ def passes(unit: MemoryUnit, as_of: datetime | None, include_archived: bool = Fa
 
 
 def in_event_window(
-    unit: MemoryUnit, time_from: datetime | None, time_to: datetime | None
+    unit: MemoryUnit,
+    time_from: datetime | None,
+    time_to: datetime | None,
+    dates: str = "event",
 ) -> bool:
-    """event-time 窗过滤（半开区间 ``[time_from, time_to)``，对 ``t_event``）。
+    """event-time 窗过滤（半开区间 ``[time_from, time_to)``，对 ``t_event``；
+    ``dates="event_or_message"`` 时 ``t_event`` 或 ``t_message`` 任一落窗即命中，见
+    :func:`common.type_def.retrieval_filter.in_event_window`）。
 
     **宽松兜底**：单元缺 ``t_event``、或 ``t_event`` 为 naive datetime（写入路径未做
     UTC 归一化，issue #91）时均不据此丢弃——前者 t_event 可能尚未 populated，后者
     与 aware 窗口比较会抛 TypeError；索引侧才是主过滤口，本函数只剔除「明确落窗外」的，
     避免 over-drop 伤召回。
     """
-    return _in_event_window(unit, time_from, time_to)
+    return _in_event_window(unit, time_from, time_to, dates)
 
 
 def matches_filters(unit: MemoryUnit, expr: FilterExpr | None) -> bool:

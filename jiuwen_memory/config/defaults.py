@@ -188,6 +188,8 @@ def default_config_dict() -> dict[str, Any]:
                     "sanitize_enabled": True,
                     "sanitize_strip_code": False,
                     "rewrite_enabled": False,
+                    # 中文规则未命中后再试英文相对时间规则，见 F11。
+                    "time_rules_en": False,
                 },
             }
         },
@@ -238,6 +240,9 @@ def default_config_dict() -> dict[str, Any]:
                     "schema_temporal_source_top_k": 20,
                     "schema_temporal_source_ratio": 0.3,
                     "schema_temporal_source_max_chars": 1200,
+                    # 事件窗判定时间：event（仅 t_event）| event_or_message
+                    # （t_event 或 t_message 任一落窗），见 F11。
+                    "time_window_dates": "event",
                 },
             }
         },

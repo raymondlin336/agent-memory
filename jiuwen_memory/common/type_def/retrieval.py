@@ -59,6 +59,9 @@ class ParsedQuery:
     as_of: datetime | None = None
     time_from: datetime | None = None
     time_to: datetime | None = None
+    # 事件窗按哪些时间判定：``event``（仅 t_event，出厂）| ``event_or_message``
+    # （t_event 或 t_message 任一落窗即命中）；由 Retriever 按配置写入。
+    time_window_dates: str = "event"
     channels: list[RecallChannel] = field(default_factory=list)
     include_archived: bool = False
     extensions: dict[str, Any] = field(default_factory=dict)

@@ -46,6 +46,7 @@ def build_system_filters(
     time_from: datetime | None,
     time_to: datetime | None,
     include_archived: bool = False,
+    time_dates: str = "event",
 ) -> list[FilterExpr]:
     """生成系统前置谓词（与用户 filters 一同 AND 下推）。"""
     out: list[FilterExpr] = []
@@ -72,7 +73,9 @@ def build_system_filters(
     # 用 LTE 会把 t_event == time_to 的记忆召回后再被复核砍掉，白占 top-k 预算。
     # OR 的 EQ 0 分支放行「未知事件时间」unit（真源 t_event=None → 索引哨兵 0），
     # 使含时间词 query 不再对无日期派生系统性空召回（见 T_EVENT_UNKNOWN）。
-    if time_from is not None or time_to is not None:
+    # time_dates="event_or_message" 时窗不下推：索引只投影 t_event 一个时间，表达不了
+    # 「t_event 或 t_message 落窗」；改由召回后真源复核（in_event_window）判定。
+    if (time_from is not None or time_to is not None) and time_dates == "event":
         window_children: list[FilterExpr] = []
         if time_from is not None:
             window_children.append(
