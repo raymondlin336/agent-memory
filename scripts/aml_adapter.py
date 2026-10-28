@@ -55,6 +55,7 @@ from jiuwen_memory.api import (  # noqa: E402
     ValidationError,
     assemble_runtime,
     build_dev_authenticator,
+    install_privacy_filter,
     internal_context,
 )
 from jiuwen_memory.common.type_def import Context, FilterClause, FilterOp, Scope  # noqa: E402
@@ -613,11 +614,27 @@ def selfcheck() -> None:
     api.list(Scope(org=ORG, user="__aml_selfcheck__"), security=_security(), limit=1)
 
 
+def install_log_privacy(handlers) -> None:
+    """Attach the engine's privacy filter to non-engine log handlers.
+
+    Engine loggers (agent_memory.*) are already filtered. Records from this adapter and from
+    third-party libraries reach the root handlers unfiltered, and an exception message can
+    carry request text or an upstream response. The filter keeps the traceback's file / line
+    / function and the exception type, and masks the exception message and any exception
+    passed as a log argument. AML_LOG_FULL_ERRORS=1 keeps full messages for local debugging.
+    """
+    if os.environ.get("AML_LOG_FULL_ERRORS") == "1":
+        return
+    for handler in handlers:
+        install_privacy_filter(handler)
+
+
 def main() -> int:
     global api, _authenticator, _ledger
     logging.basicConfig(
         level=logging.INFO, format="[%(asctime)s] %(name)s %(levelname)s %(message)s"
     )
+    install_log_privacy(logging.getLogger().handlers)
     parser = argparse.ArgumentParser(prog="aml-adapter")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8200)

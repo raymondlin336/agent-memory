@@ -168,5 +168,11 @@ release) passed with `--data`; a typical question takes 5-12 min and several can
 ## Tuning (env, defaults in brackets)
 
 `AML_MAX_ADD_CONCURRENCY` [8], `AML_MAX_SEARCH_CONCURRENCY` [32], `AML_ADD_DEADLINE_S` [1500],
-`AML_DATE_PREFIX` [1], `AML_OPTIONS_IN_QUERY` [0], `AML_IN_MEMORY` [1 in the start script].
+`AML_DATE_PREFIX` [1], `AML_OPTIONS_IN_QUERY` [0], `AML_IN_MEMORY` [1 in the start script],
+`AML_LOG_FULL_ERRORS` [0].
+
+Logs carry IDs, counts, timings and status codes, not message or memory text. Exception messages are masked
+(`RuntimeError: *`) while the traceback's files and lines stay; `AML_LOG_FULL_ERRORS=1` shows full messages for local
+debugging only. Logs still contain `user_id` / `request_id` values, so they fall under the same data-retention rules
+as the stored memories.
 Design notes and the full contract mapping: `docs/features/F08-aml-leaderboard-adapter.md`.

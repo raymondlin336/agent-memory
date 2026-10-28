@@ -106,8 +106,9 @@ def make_handler(scorer):
                 self._send(200, rerank_response(scorer, body))
             except ValueError as exc:
                 self._send(400, {"error": str(exc)})
-            except Exception:  # noqa: BLE001
-                logger.exception("rerank failed")
+            except Exception as exc:  # noqa: BLE001
+                # Type only: the message or traceback could quote query / document text.
+                logger.error("rerank failed: %s", type(exc).__name__)
                 self._send(500, {"error": "rerank failed"})
 
         def log_message(self, format, *args):  # noqa: A002  # pylint: disable=redefined-builtin
