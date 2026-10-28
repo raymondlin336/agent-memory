@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# AML Add/Search adapter (scripts/aml_adapter.py) on the real Redis / Elasticsearch / Milvus stores.
+# Build context is the repo root (see docker-compose.yml). No torch here: rerank runs in its own image.
+FROM python:3.11-slim
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
+# Client matching the Milvus 2.4 server in docker-compose.yml. The engine uses only MilvusClient
+# calls and keyword arguments that exist in 2.4 (create_collection, insert, upsert, search, query,
+# delete, ...). pymilvus 2.4 imports pkg_resources, which setuptools 81+ no longer ships, and was
+# built against protobuf 5.
+ARG PYMILVUS_SPEC="pymilvus>=2.4.4,<2.5"
+ARG PYMILVUS_SUPPORT="setuptools<81 protobuf>=5,<6"
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONIOENCODING=utf-8 \
+    PYTHONPATH=/app \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml ./
+COPY jiuwen_memory ./jiuwen_memory
+COPY jiuwen_memory_entry ./jiuwen_memory_entry
+COPY evaluation ./evaluation
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
+    && pip install -e ".[deploy]" -r evaluation/environment/requirements.txt "${PYMILVUS_SPEC}" \
+        ${PYMILVUS_SUPPORT} \
+    && python -c "from pymilvus import MilvusClient; import redis, elasticsearch"
+
+COPY scripts ./scripts
+COPY deploy/aml/config.yml ./deploy/aml/config.yml
+
+# Request ledger lives on a volume (see docker-compose.yml); never inside the image.
+ENV AML_STATE_DB=/data/aml_adapter_state.db
+VOLUME ["/data"]
+
+EXPOSE 8200
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:8200/health >/dev/null || exit 1
+
+# 0.0.0.0 inside the container; the adapter refuses to start unless AML_ADAPTER_KEY is a strong key.
+CMD ["python", "scripts/aml_adapter.py", "--config", "deploy/aml/config.yml", \
+     "--host", "0.0.0.0", "--port", "8200"]

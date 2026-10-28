@@ -11,7 +11,8 @@ PowerShell. Runs JiuwenMemory behind the Agent Memory Leaderboard Add/Search con
 | text-embedding-v4 | `EMBED_BASE_URL` (DashScope intl) | 1024-dim embeddings |
 
 In-memory mode (`AML_IN_MEMORY=1`) loses all data when the adapter stops; anything that must persist needs the
-Redis / Elasticsearch / Milvus backends configured in `deploy/aml/config.yml`.
+Redis / Elasticsearch / Milvus backends configured in `deploy/aml/config.yml`. For a server with those backends,
+use the Docker Compose setup in [server/README.md](server/README.md) instead of this guide.
 
 ## Setup
 

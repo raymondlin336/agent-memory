@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1
+# Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
+# MiniLM cross-encoder rerank server (scripts/rerank_server.py), CPU only.
+# The model is downloaded at build time, so the running container never contacts Hugging Face.
+FROM python:3.11-slim
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+# Set to a mirror (e.g. https://hf-mirror.com) when huggingface.co is unreachable from the build host.
+ARG HF_ENDPOINT=https://huggingface.co
+ARG RERANK_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/models
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Versions match the ones the rankings were checked with (scripts/rerank_server.py).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --index-url "${TORCH_INDEX_URL}" "torch==2.15.0" \
+    && pip install --index-url "${PIP_INDEX_URL}" "transformers==5.21.0"
+
+RUN HF_ENDPOINT="${HF_ENDPOINT}" python -c "\
+from transformers import AutoModelForSequenceClassification, AutoTokenizer; \
+AutoTokenizer.from_pretrained('${RERANK_MODEL}'); \
+AutoModelForSequenceClassification.from_pretrained('${RERANK_MODEL}')"
+
+COPY scripts/rerank_server.py ./scripts/rerank_server.py
+
+ENV HF_HUB_OFFLINE=1 \
+    RERANK_MODEL=${RERANK_MODEL}
+
+EXPOSE 8906
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+    CMD curl -fsS http://127.0.0.1:8906/v1 >/dev/null || exit 1
+
+CMD ["sh", "-c", "exec python scripts/rerank_server.py --host 0.0.0.0 --port 8906 --model \"$RERANK_MODEL\""]

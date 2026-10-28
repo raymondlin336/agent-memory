@@ -1,0 +1,24 @@
+# HTTPS front for the AML adapter (docker compose profile "https"). Caddy obtains and renews a TLS
+# certificate for AML_DOMAIN automatically; the domain's DNS must point at this server and ports
+# 80 and 443 must be open. Timeouts allow AML's 30-minute Add requests.
+{
+	servers {
+		timeouts {
+			read_body 5m
+			read_header 1m
+			write 40m
+			idle 10m
+		}
+	}
+}
+
+{$AML_DOMAIN} {
+	request_body {
+		max_size 64MB
+	}
+	reverse_proxy adapter:8200 {
+		transport http {
+			response_header_timeout 35m
+		}
+	}
+}

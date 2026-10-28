@@ -25,3 +25,7 @@ results.json
 .DS_Store
 .idea/
 .vscode/
+
+# AML server images copy evaluation/ for its code only: keep run outputs and datasets out of every image.
+evaluation/outputs/
+evaluation/datasets/
