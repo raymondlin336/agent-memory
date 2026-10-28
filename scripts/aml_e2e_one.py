@@ -9,14 +9,15 @@ directly with harness runs.
 
 Usage (adapter already running; AML_DATE_PREFIX=0 matches the harness context format)::
 
-    python scripts/aml_e2e_one.py --question-id 1d4e3b97 \
-        --data evaluation/datasets/longmemeval/shared40.json \
-        --env evaluation/environment/.env --url http://127.0.0.1:8200
+    python scripts/aml_e2e_one.py --question-id 89527b6b \
+        --data evaluation/datasets/longmemeval/longmemeval_mini.json --url http://127.0.0.1:8200
 
-The answer / judge model comes from ``LONGMEMEVAL_CHAT_UPSTREAM_URL`` /
-``LONGMEMEVAL_CHAT_MODEL`` / ``LONGMEMEVAL_CHAT_API_KEYS`` (first of a comma-separated list) in the
-env file, the same upstream as the harness QA proxy. The adapter key comes from
-``AML_ADAPTER_KEY``.
+``--env`` defaults to deploy/aml/.env, falling back to evaluation/environment/.env. The answer /
+judge model comes from ``LONGMEMEVAL_CHAT_UPSTREAM_URL`` / ``LONGMEMEVAL_CHAT_MODEL`` /
+``LONGMEMEVAL_CHAT_API_KEYS`` (first of a comma-separated list), the same upstream as the harness QA
+proxy; without them it uses the adapter's own ``API_BASE`` / ``MODEL_NAME`` / ``API_KEY``. The
+adapter key comes from ``AML_ADAPTER_KEY`` (``local-dev-key`` when empty, as in
+scripts/start-aml-local.ps1).
 """
 
 from __future__ import annotations
@@ -94,15 +95,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="aml-e2e-one")
     parser.add_argument("--question-id", required=True)
     parser.add_argument("--data", default="evaluation/datasets/longmemeval/shared40.json")
-    parser.add_argument("--env", default="evaluation/environment/.env")
+    parser.add_argument("--env", default="")
     parser.add_argument("--url", default="http://127.0.0.1:8200")
     parser.add_argument("--top-k", type=int, default=100)
     parser.add_argument("--cutoffs", default="30,10,20,50")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
-    load_env(args.env)
-    adapter_key = os.environ["AML_ADAPTER_KEY"]
+    env_file = args.env or next(
+        (p for p in ("deploy/aml/.env", "evaluation/environment/.env") if Path(p).exists()), ""
+    )
+    if env_file:
+        load_env(env_file)
+    adapter_key = os.environ.get("AML_ADAPTER_KEY") or "local-dev-key"
     items = {e["question_id"]: e for e in json.load(open(args.data, encoding="utf-8"))}
     item = items[args.question_id]
     user_id = f"e2e-{args.question_id}-{uuid.uuid4().hex[:8]}"
@@ -136,10 +141,15 @@ def main() -> int:
         raise RuntimeError(f"search returned {len(data)} > top_k {args.top_k}")
     print(f"  search: {len(data)} results in {search_s:.2f}s")
 
-    upstream = os.environ["LONGMEMEVAL_CHAT_UPSTREAM_URL"].rstrip("/")
+    if os.environ.get("LONGMEMEVAL_CHAT_UPSTREAM_URL"):
+        upstream = os.environ["LONGMEMEVAL_CHAT_UPSTREAM_URL"].rstrip("/")
+        model = os.environ["LONGMEMEVAL_CHAT_MODEL"]
+        chat_key = os.environ["LONGMEMEVAL_CHAT_API_KEYS"].split(",")[0].strip()
+    else:  # same gpt-4o-mini endpoint the adapter uses for extraction
+        upstream = os.environ["API_BASE"].rstrip("/")
+        model = os.environ["MODEL_NAME"]
+        chat_key = os.environ["API_KEY"]
     upstream = upstream.removesuffix("/chat/completions")
-    model = os.environ["LONGMEMEVAL_CHAT_MODEL"]
-    chat_key = os.environ["LONGMEMEVAL_CHAT_API_KEYS"].split(",")[0].strip()
 
     def chat(category: str, max_tokens_env: str):
         return openai_chat(upstream, model, chat_key, OpenAIChatOptions(

@@ -14,6 +14,11 @@ Redis / Elasticsearch / Milvus backends configured in `deploy/aml/config.yml`.
 
 ## Setup
 
+Requirements: Python 3.11+, Windows PowerShell 5.1+ for the start script, outbound HTTPS to the model APIs and (on
+first start) to huggingface.co. On Windows the repo has paths longer than 260 characters: clone into a short directory
+or enable long paths (`git config --global core.longpaths true`). Where huggingface.co is unreachable, set
+`HF_ENDPOINT` to a mirror.
+
 ```bash
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev,rerank]" -r evaluation/environment/requirements.txt \
@@ -126,16 +131,24 @@ Errors are JSON `{"error": "..."}`:
 
 ## Test one full LongMemEval question end to end
 
-Needs `evaluation/datasets/longmemeval/shared40.json` and `LONGMEMEVAL_CHAT_*` settings in the env file (used to answer
-and judge, like the benchmark harness):
+`scripts/aml_e2e_one.py` plays the AML platform for one question: it sends the question's sessions to `/add` in
+20-message chunks, calls `/search` with `top_k` 100, then answers and judges with gpt-4o-mini at 30/10/20/50 memories,
+using the benchmark harness's LongMemEval prompts. With the stack running:
 
 ```bash
-AML_ADAPTER_KEY=local-dev-key .venv/Scripts/python.exe scripts/aml_e2e_one.py --question-id 1d4e3b97
+.venv/Scripts/python.exe scripts/aml_e2e_one.py --data evaluation/datasets/longmemeval/longmemeval_mini.json --question-id 89527b6b
 ```
 
-It sends the question's sessions to `/add` in 20-message chunks, calls `/search` with `top_k` 100, then answers and
-judges at 30/10/20/50 memories. Expect about 5-12 min per question; several can run in parallel. Output goes to
-`evaluation/outputs/aml_e2e/`.
+`longmemeval_mini.json` ships with the repo (one question, one short session, about a minute). It exercises the whole
+pipeline; a single question's score says little about quality (this one is currently answered "not enough
+information"). Larger runs need a
+LongMemEval file in the same format (e.g. `longmemeval_oracle.json` or `longmemeval_s_cleaned.json` from the LongMemEval
+release) passed with `--data`; a typical question takes 5-12 min and several can run in parallel.
+
+- Reads the same env file as the start script; the answer / judge model is `API_BASE` / `MODEL_NAME` / `API_KEY` unless
+  `LONGMEMEVAL_CHAT_UPSTREAM_URL` / `LONGMEMEVAL_CHAT_MODEL` / `LONGMEMEVAL_CHAT_API_KEYS` are set.
+- `AML_DATE_PREFIX=0` on the adapter matches the harness's context format exactly.
+- Output (scores, answer, retrieved memories, timings) goes to `evaluation/outputs/aml_e2e/`.
 
 ## Tuning (env, defaults in brackets)
 
