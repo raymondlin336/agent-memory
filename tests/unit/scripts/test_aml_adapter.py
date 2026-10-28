@@ -295,6 +295,27 @@ def test_authorization_variants(aml, monkeypatch, headers, ok):
     assert aml._authorized(headers) is ok
 
 
+_STRONG = "x" * 32
+
+
+@pytest.mark.parametrize(
+    ("host", "key", "ok"),
+    [
+        ("127.0.0.1", "", True),
+        ("localhost", "local-dev-key", True),
+        ("::1", "k", True),
+        ("0.0.0.0", "", False),
+        ("0.0.0.0", "local-dev-key", False),
+        ("0.0.0.0", "x" * 31, False),
+        ("0.0.0.0", _STRONG, True),
+        ("10.0.0.5", _STRONG, True),
+        ("example.org", "short", False),
+    ],
+)
+def test_public_bind_requires_strong_key(aml, host, key, ok):
+    assert (aml.public_bind_problem(host, key) is None) is ok
+
+
 def test_classify_maps_engine_errors(aml):
     assert aml._classify(aml.ValidationError("bad")).status == 422
     assert aml._classify(aml.RateLimitedError("slow")).status == 429

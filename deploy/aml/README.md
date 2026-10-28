@@ -31,7 +31,8 @@ Settings in `deploy/aml/.env`:
 - `API_KEY` (+ `API_BASE`, `MODEL_NAME`): gpt-4o-mini. OpenRouter works: `API_BASE=https://openrouter.ai/api/v1`,
   `MODEL_NAME=openai/gpt-4o-mini`.
 - `EMBED_API_KEY`: DashScope key for text-embedding-v4.
-- `AML_ADAPTER_KEY`: the key clients send. The start script uses `local-dev-key` when it is empty.
+- `AML_ADAPTER_KEY`: the key clients send. Empty means `local-dev-key`, accepted only on localhost (see
+  [Auth and errors](#auth-and-errors)).
 - `RERANK_BASE_URL` (default `http://127.0.0.1:8906/v1`): where the rerank server listens. The `rerank` extra
   installs its dependencies (torch CPU build + transformers). The MiniLM model (~90 MB) downloads from Hugging Face on
   first start and is cached; `HF_HUB_OFFLINE=1` uses only the cache. `RERANK_SERVER_PYTHON` / `RERANK_SERVER_SCRIPT`
@@ -116,7 +117,21 @@ curl -s -X POST http://127.0.0.1:8200/search -H "X-Api-Key: local-dev-key" -H "C
 
 ## Auth and errors
 
-Auth: `Authorization: Bearer <key>`, `Authorization: Token <key>` or `X-Api-Key: <key>`.
+Auth: `Authorization: Bearer <key>`, `Authorization: Token <key>` or `X-Api-Key: <key>`; all three are always
+accepted, and the key is compared in constant time.
+
+On localhost any key works, including `local-dev-key`. On any other address (`-BindHost 0.0.0.0`, a LAN or public
+IP, `--host` in `run-aml.sh`) the adapter refuses to start unless `AML_ADAPTER_KEY` is at least 32 characters and not a
+development key; `AML_ALLOW_NO_AUTH` has no effect there. Generate one and keep it only in the env file:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+The AML access request asks for the authentication scheme and this key (the "Memory System Key"); the platform
+stores it encrypted. Declare one scheme, e.g. `Authorization: Bearer <key>`, and keep the key out of URLs, logs and
+commits. Changing it means updating the env file, restarting the adapter, and updating the key bound in AML.
+
 Errors are JSON `{"error": "..."}`:
 
 | Status | When | AML retries? |
