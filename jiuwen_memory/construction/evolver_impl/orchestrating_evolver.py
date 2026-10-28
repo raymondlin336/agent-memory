@@ -411,6 +411,8 @@ class OrchestratingEvolver(Evolver):
         need_llm: list[tuple[MemoryUnit, MemoryUnit, float, list[tuple[MemoryUnit, float]]]] = []
 
         # ---- 第一段：逐条 recall + 阈值筛选（不调 LLM）----
+        # Batch the candidates' embeddings up front; searches below stay one by one, in order.
+        self._dedup.prefetch(candidates)
         for candidate in candidates:
             try:
                 hit_units = self._dedup.recall(candidate)
@@ -1034,6 +1036,7 @@ class OrchestratingEvolver(Evolver):
         过滤、聚合取 max），合并去重后取 top-N。dedup.recall 内部异常吞掉返回空，不阻断。
         """
         seen: dict[str, MemoryUnit] = {}
+        self._dedup.prefetch(units)
         for unit in units:
             try:
                 hits = self._dedup.recall(unit)

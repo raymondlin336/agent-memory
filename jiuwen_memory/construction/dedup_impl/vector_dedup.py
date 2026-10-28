@@ -64,6 +64,18 @@ class VectorDedup(Dedup):
     def health(self) -> None:
         return None
 
+    def prefetch(self, candidates: list[MemoryUnit]) -> None:
+        """Embed all candidates' text in one batched call so each recall hits the cache."""
+        if not getattr(self._embedder, "caches_vectors", False):
+            return  # without a cache the batch result would not be reused
+        texts = list(dict.fromkeys(c.content for c in candidates if c.content))
+        if len(texts) < 2:
+            return
+        try:
+            self._embedder.embed(texts)
+        except Exception as exc:  # noqa: BLE001 - recall embeds per candidate as before
+            logger.warning("VectorDedup: prefetch embed failed: error_type=%s", type(exc).__name__)
+
     def recall(self, candidate: MemoryUnit) -> list[tuple[MemoryUnit, float]]:
         # Step A: 向量化候选
         try:

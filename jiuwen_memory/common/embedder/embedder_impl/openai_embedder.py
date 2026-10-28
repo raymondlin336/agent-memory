@@ -13,7 +13,10 @@
 
 from __future__ import annotations
 
+import threading
 import time
+from array import array
+from collections import OrderedDict
 from typing import TYPE_CHECKING
 
 import openai
@@ -73,6 +76,7 @@ class OpenAIEmbedder(Embedder):
         ssl_ca_cert: str | None = None,
         config_source: ConfigSource | None = None,
         config_namespace: str = NS_EMBEDDER,
+        cache_size: int = 2048,
     ) -> None:
         # 构造期值仅作 ConfigSource 缺失时的回落；运行时以 fetch 为准
         self._fallback_model = model_name
@@ -80,6 +84,8 @@ class OpenAIEmbedder(Embedder):
         self._fallback_api_key = api_key
         self._dimension = dimension
         self._max_batch_size = max_batch_size
+        self._cache_size = max(0, int(cache_size))  # 0 disables the vector cache
+        self._vector_cache = _EmbeddingCache()
         self._timeout = timeout
         self._max_retries = max_retries
         self._ssl_verify = ssl_verify
@@ -108,6 +114,11 @@ class OpenAIEmbedder(Embedder):
         except Exception as exc:
             raise HealthCheckError(f"Embedder health check failed: {exc}") from exc
 
+    @property
+    def caches_vectors(self) -> bool:
+        """True when repeated texts are served from the vector cache (see VectorDedup.prefetch)."""
+        return self._cache_size > 0
+
     def dimension(self) -> int:
         """返回配置的输出向量维度。"""
         return self._dimension
@@ -120,7 +131,24 @@ class OpenAIEmbedder(Embedder):
         """
         if not texts:
             return []
+        if self._cache_size == 0:
+            return self._embed_uncached(texts)
 
+        # Serve repeated texts from the shared cache; request only the misses, each once.
+        ep = self._endpoint()
+        keys = [(ep.model, ep.base_url, self._dimension, text) for text in texts]
+        vectors = self._vector_cache.get_many(keys)
+        misses = list(dict.fromkeys(t for t, v in zip(texts, vectors) if v is None))
+        if misses:
+            fresh = dict(zip(misses, self._embed_uncached(misses)))
+            self._vector_cache.put_many(
+                [((ep.model, ep.base_url, self._dimension, t), v) for t, v in fresh.items()],
+                self._cache_size,
+            )
+            vectors = [v if v is not None else list(fresh[t]) for t, v in zip(texts, vectors)]
+        return vectors
+
+    def _embed_uncached(self, texts: list[str]) -> list[list[float]]:
         # 分批
         all_vectors: list[list[float]] = []
         for batch in self._split_batches(texts):
@@ -235,6 +263,44 @@ class OpenAIEmbedder(Embedder):
         return batches
 
 
+class _EmbeddingCache:
+    """LRU of text -> vector held by one OpenAIEmbedder instance.
+
+    Construction embeds the same text more than once: dedup embeds a candidate, indexing then
+    embeds the stored unit's content. The runtime shares a single embedder instance across
+    components, so one cache per instance catches both. Keys include model, base URL and
+    dimension, since the endpoint is late-bound and may change. Vectors are kept as float64
+    arrays (~8 KB each at 1024 dims) and returned as fresh lists.
+    """
+
+    def __init__(self) -> None:
+        self._data: OrderedDict[tuple, array] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get_many(self, keys: list[tuple]) -> list[list[float] | None]:
+        with self._lock:
+            out: list[list[float] | None] = []
+            for key in keys:
+                vec = self._data.get(key)
+                if vec is not None:
+                    self._data.move_to_end(key)
+                out.append(list(vec) if vec is not None else None)
+            return out
+
+    def put_many(self, items: list[tuple[tuple, list[float]]], max_size: int) -> None:
+        with self._lock:
+            for key, vector in items:
+                self._data[key] = array("d", vector)
+                self._data.move_to_end(key)
+            while len(self._data) > max_size:
+                self._data.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._data.clear()
+
+
+
 # -- 注册到 EmbedderProducer（实现自注册，新增无需改 producer/make_plugins） ------ #
 
 
@@ -260,4 +326,5 @@ def _build(config):
         ssl_verify=ssl.verify,
         ssl_ca_cert=ssl.ca_cert,
         config_source=ConfigSourceProducer.get_cached("default"),
+        cache_size=config.get("embedder_cache_size", 2048),
     )

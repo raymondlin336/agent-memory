@@ -73,6 +73,15 @@ class Dedup(ConstructionOperator):
         实现内部任何异常都应吞掉并返回空列表——去重是尽力而为，不可阻断演进。
         """
 
+    def prefetch(self, candidates: list[MemoryUnit]) -> None:
+        """Optional warm-up before a run of ``recall`` calls on ``candidates``.
+
+        Implementations may batch work that does not depend on store state (e.g. embedding the
+        candidates' text in one request). Must not change what ``recall`` returns; the default
+        does nothing.
+        """
+        del candidates
+
     # -- 共享：从真源按 unit_id 加载 MemoryUnit（跨 scope 回退） ---------------- #
     def _load_unit(self, unit_id: str, scope: Scope) -> MemoryUnit | None:
         """从 KV 真源点读 MemoryUnit；缺失时跨作用域回退。"""
