@@ -1,6 +1,7 @@
 # AML adapter: local quickstart (no Docker)
 
-Runs JiuwenMemory behind the Agent Memory Leaderboard Add/Search contract on one Windows machine:
+Runs JiuwenMemory behind the Agent Memory Leaderboard Add/Search contract on one Windows machine (Linux:
+[README-linux.md](README-linux.md)):
 
 | Service | Address | What it is |
 |---|---|---|
