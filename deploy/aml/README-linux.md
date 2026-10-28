@@ -15,14 +15,24 @@ Redis / Elasticsearch / Milvus backends configured in `deploy/aml/config.yml`.
 
 ## Setup
 
-Requirements: Python 3.11+ with `venv`, `bash`, `curl`, outbound HTTPS to the model APIs and (on first start) to
-huggingface.co. Where huggingface.co is unreachable, set `HF_ENDPOINT` to a mirror. Memory: about 600 MB at start
-(reranker ~400 MB, adapter ~150 MB); in in-memory mode the adapter grows with the stored memories.
+Requirements: Python 3.11+ with the `venv` module, `bash`, `curl`, `git`, outbound HTTPS to the model APIs and (on
+first start) to huggingface.co. Where huggingface.co is unreachable, set `HF_ENDPOINT` to a mirror. Ubuntu 24.04 and
+Debian 12 ship a suitable Python; Ubuntu 22.04 ships 3.10, which is too old (install `python3.11` and use it below).
+Memory: about 600 MB at start (reranker ~400 MB, adapter ~150 MB); in in-memory mode the adapter grows
+with the stored memories. On Debian / Ubuntu:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev,rerank]" -r evaluation/environment/requirements.txt \
-  --extra-index-url https://download.pytorch.org/whl/cpu
+sudo apt-get install -y python3 python3-venv curl git   # 22.04: python3.11 python3.11-venv
+```
+
+Install torch from the CPU-only index first: on Linux the default PyPI build is the CUDA one (several GB of NVIDIA
+libraries), which the reranker does not need.
+
+```bash
+python3 -m venv .venv            # 22.04: python3.11 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip
+.venv/bin/python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+.venv/bin/python -m pip install -e ".[dev,rerank]" -r evaluation/environment/requirements.txt
 cp deploy/aml/.env.example deploy/aml/.env
 chmod 600 deploy/aml/.env
 ```
@@ -142,6 +152,9 @@ After=network-online.target
 [Service]
 User=aml
 WorkingDirectory=/opt/agent-memory
+# /var/lib/aml, created and owned by User; holds the model cache (the user may have no home directory).
+StateDirectory=aml
+Environment=HF_HOME=/var/lib/aml/hf
 ExecStart=/opt/agent-memory/.venv/bin/python scripts/rerank_server.py --port 8906
 Restart=on-failure
 
@@ -159,8 +172,10 @@ Requires=aml-rerank.service
 [Service]
 User=aml
 WorkingDirectory=/opt/agent-memory
+StateDirectory=aml
 EnvironmentFile=/opt/agent-memory/deploy/aml/.env
 Environment=PYTHONPATH=/opt/agent-memory PYTHONIOENCODING=utf-8
+Environment=AML_STATE_DB=/var/lib/aml/aml_adapter_state.db
 # In-memory stores, as with the start script; remove to use the Redis / Elasticsearch / Milvus backends.
 Environment=AML_IN_MEMORY=1
 ExecStart=/opt/agent-memory/.venv/bin/python scripts/aml_adapter.py --config deploy/aml/config.yml --host 127.0.0.1 --port 8200
@@ -178,8 +193,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now aml-rerank aml-adapt
 journalctl -u aml-adapter -f
 ```
 
-`EnvironmentFile` takes plain `KEY=value` lines, which is the format of `deploy/aml/.env`. Set `AML_STATE_DB` to a path
-on persistent disk (e.g. `/var/lib/aml/aml_adapter_state.db`): deleting it makes AML's retried Adds write twice.
+`EnvironmentFile` takes plain `KEY=value` lines, which is the format of `deploy/aml/.env`. Values from that file win
+over the unit's `Environment=` lines, so leave `AML_STATE_DB` and `AML_IN_MEMORY` unset in `.env` (as in
+`.env.example`) or set them there instead. `StateDirectory=aml` creates `/var/lib/aml` for the request ledger and model cache: keep it on
+persistent disk, since deleting the ledger makes AML's retried Adds write twice. Create the service user and give it
+read access to the checkout first, e.g. `sudo useradd --system --no-create-home aml`.
 
 AML only connects to public HTTPS endpoints. Keep the adapter on `127.0.0.1` and put a TLS reverse proxy in front of
 it. The proxy must allow requests to run for up to 30 minutes (AML's per-request limit) and must not buffer or reject
