@@ -398,11 +398,16 @@ class LongMemEvalDataset(Dataset):
                     "dialogue_turn_max_chars must exceed the rendered role prefix"
                 )
             content_limit = max_chars - len(role_prefix)
-            for sentence in cls._bounded_sentences(
-                str(original.get("content", "")), content_limit
+            # Pack whole sentences into chunks of at most half the limit, leaving the other
+            # half for preceding context. One group per sentence turned a 4.1k-char exchange
+            # into ~56 extraction calls; packed it is ~3.
+            pack_limit = max(1, content_limit // 2)
+            for chunk in cls._pack_sentences(
+                cls._bounded_sentences(str(original.get("content", "")), pack_limit),
+                pack_limit,
             ):
                 synthetic = dict(original)
-                synthetic["content"] = sentence
+                synthetic["content"] = chunk
                 current_line = cls._turn_content(synthetic)
                 context_budget = max(0, max_chars - len(current_line))
                 context = cls._tail_context(previous_lines, context_budget)
@@ -422,6 +427,27 @@ class LongMemEvalDataset(Dataset):
                 previous_lines.append(current_line)
                 fallback_index += 1
         return groups
+
+    @staticmethod
+    def _pack_sentences(sentences: list[str], max_chars: int) -> list[str]:
+        """Greedily join consecutive sentences (one per line) into chunks of <= max_chars.
+
+        Sentences come from _bounded_sentences, so none is longer than max_chars on its own.
+        """
+        chunks: list[str] = []
+        current: list[str] = []
+        used = 0
+        for sentence in sentences:
+            extra = len(sentence) + (1 if current else 0)
+            if current and used + extra > max_chars:
+                chunks.append("\n".join(current))
+                current, used = [], 0
+                extra = len(sentence)
+            current.append(sentence)
+            used += extra
+        if current:
+            chunks.append("\n".join(current))
+        return chunks
 
     @classmethod
     def _bounded_sentences(cls, text: str, max_chars: int) -> list[str]:
