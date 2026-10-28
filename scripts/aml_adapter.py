@@ -453,7 +453,10 @@ def handle_search(req: Any) -> dict:
         if isinstance(it.score, (int, float)) and math.isfinite(it.score):
             entry["score"] = float(it.score)
         if ts is not None:
-            entry["created_at"] = ts.isoformat()
+            # Stored as naive UTC on write; aware values are converted to UTC.
+            # The explicit Z matches the AML example.
+            utc = ts.astimezone(UTC).replace(tzinfo=None) if ts.tzinfo else ts
+            entry["created_at"] = utc.isoformat() + "Z"
         data.append(entry)
     return {"data": data[:top_k]}  # 超出 top_k 即契约失败，硬截断
 

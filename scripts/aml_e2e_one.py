@@ -1,19 +1,22 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-"""经 AML 适配层 HTTP 端点端到端跑一道 LongMemEval 题：/add → /search → 答题 → 判分。
+"""Run one LongMemEval question end to end through the AML adapter.
 
-模拟 AML 平台的调用方式：每个会话按至多 20 条消息分块 POST /add（每条带会话时间戳，毫秒），
-全部写完后用题面 POST /search（top_k=100），再用与 harness 相同的 LongMemEval 答题 / 判分
-prompt（LLMJudge）在各 cutoff 下打分，便于与 harness 结果直接对照。
+Flow: /add -> /search -> answer -> judge. Calls the adapter the way the AML platform does: each
+session is POSTed to /add in chunks of at most 20 messages (each carrying the session timestamp in
+ms). After all writes, the question is POSTed to /search (top_k=100), then answered and judged at
+each cutoff with the same LongMemEval prompts as the harness (LLMJudge), so results compare
+directly with harness runs.
 
-用法（适配层需已启动，建议 AML_DATE_PREFIX=0 以与 harness 的上下文形态一致）::
+Usage (adapter already running; AML_DATE_PREFIX=0 matches the harness context format)::
 
     python scripts/aml_e2e_one.py --question-id 1d4e3b97 \
         --data evaluation/datasets/longmemeval/shared40.json \
         --env evaluation/environment/.env --url http://127.0.0.1:8200
 
-答题 / 判分模型取自 env 文件的 ``LONGMEMEVAL_CHAT_UPSTREAM_URL`` / ``LONGMEMEVAL_CHAT_MODEL`` /
-``LONGMEMEVAL_CHAT_API_KEYS``（逗号分隔取第一个），与 harness 的 QA 代理同一上游。
-适配层 key 取自 ``AML_ADAPTER_KEY``。
+The answer / judge model comes from ``LONGMEMEVAL_CHAT_UPSTREAM_URL`` /
+``LONGMEMEVAL_CHAT_MODEL`` / ``LONGMEMEVAL_CHAT_API_KEYS`` (first of a comma-separated list) in the
+env file, the same upstream as the harness QA proxy. The adapter key comes from
+``AML_ADAPTER_KEY``.
 """
 
 from __future__ import annotations
@@ -39,12 +42,12 @@ from evaluation.longmemeval.metrics.llm_judge import (  # noqa: E402
 )
 
 DATE_FMT = "%Y/%m/%d (%a) %H:%M"
-CHUNK = 20  # AML 单次 Add 至多 20 条消息
+CHUNK = 20  # AML sends at most 20 messages per Add
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 524}
 
 
 def load_env(path: str) -> None:
-    """把 env 文件中尚未设置的变量放进 os.environ（不覆盖已有值）。"""
+    """Load variables from an env file into os.environ without overriding ones already set."""
     for line in Path(path).read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
@@ -54,7 +57,7 @@ def load_env(path: str) -> None:
 
 
 def post(url: str, body: dict, key: str, attempts: int = 6) -> dict:
-    """POST JSON；按 AML 的可重试状态码退避重试。"""
+    """POST JSON, retrying with backoff on the status codes AML retries."""
     data = json.dumps(body).encode("utf-8")
     for attempt in range(1, attempts + 1):
         req = urllib.request.Request(
@@ -75,7 +78,7 @@ def post(url: str, body: dict, key: str, attempts: int = 6) -> dict:
 
 
 def build_chunks(item: dict) -> list[tuple[str, list[dict]]]:
-    """按会话切分为 (session_id, ≤20 条消息) 列表，消息带会话时间戳（无时区按 UTC 解释）。"""
+    """Split into (session_id, <=20 messages) chunks with the session timestamp (naive = UTC)."""
     chunks = []
     for sid, date, turns in zip(
         item["haystack_session_ids"], item["haystack_dates"], item["haystack_sessions"]

@@ -248,7 +248,7 @@ def test_search_shape_cap_and_filters(aml):
     out = aml.handle_search({"query": "q", "user_id": "u1", "top_k": 2})
     assert [d["id"] for d in out["data"]] == ["a", "c"], "dedupe, drop empties, cap at top_k"
     assert out["data"][0]["content"] == "[2023-05-07] first"
-    assert out["data"][0]["created_at"] == "2023-05-07T10:00:00"
+    assert out["data"][0]["created_at"] == "2023-05-07T10:00:00Z"
     assert "created_at" not in out["data"][1] and "score" not in out["data"][1]
     assert api.search_kwargs["top_k"] == 2 and api.search_kwargs["scope"].user == "u-u1"
 
