@@ -295,6 +295,27 @@ def test_authorization_variants(aml, monkeypatch, headers, ok):
     assert aml._authorized(headers) is ok
 
 
+_STRONG = "x" * 32
+
+
+@pytest.mark.parametrize(
+    ("host", "key", "ok"),
+    [
+        ("127.0.0.1", "", True),
+        ("localhost", "local-dev-key", True),
+        ("::1", "k", True),
+        ("0.0.0.0", "", False),
+        ("0.0.0.0", "local-dev-key", False),
+        ("0.0.0.0", "x" * 31, False),
+        ("0.0.0.0", _STRONG, True),
+        ("10.0.0.5", _STRONG, True),
+        ("example.org", "short", False),
+    ],
+)
+def test_public_bind_requires_strong_key(aml, host, key, ok):
+    assert (aml.public_bind_problem(host, key) is None) is ok
+
+
 def test_classify_maps_engine_errors(aml):
     assert aml._classify(aml.ValidationError("bad")).status == 422
     assert aml._classify(aml.RateLimitedError("slow")).status == 429
@@ -530,3 +551,34 @@ def test_real_engine_same_user_concurrent_adds_no_duplicates(aml, monkeypatch):
         assert len(out["data"]) == 1, f"retries duplicated the memory: {len(out['data'])}"
     finally:
         runtime.close()
+
+
+def _capture(aml, monkeypatch, full_errors: bool):
+    import io
+    import logging
+
+    monkeypatch.setenv("AML_LOG_FULL_ERRORS", "1" if full_errors else "0")
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    aml.install_log_privacy([handler])
+    log = logging.getLogger("aml-adapter-privacy-test")
+    log.propagate = False
+    log.handlers = [handler]
+    secret = "I just adopted a beagle named Biscuit"
+    try:
+        raise RuntimeError(f"upstream rejected prompt: {secret}")
+    except RuntimeError as exc:
+        log.exception("request failed")
+        log.error("engine authorization failure: %s", exc)
+    return stream.getvalue(), secret
+
+
+def test_logs_mask_exception_text(aml, monkeypatch):
+    out, secret = _capture(aml, monkeypatch, full_errors=False)
+    assert secret not in out
+    assert "RuntimeError" in out and "test_aml_adapter.py" in out  # type and location kept
+
+
+def test_full_errors_opt_out_keeps_messages(aml, monkeypatch):
+    out, secret = _capture(aml, monkeypatch, full_errors=True)
+    assert secret in out

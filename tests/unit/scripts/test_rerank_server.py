@@ -75,3 +75,16 @@ def test_http_rerank_health_and_errors(server):
     assert status == 200 and [r["index"] for r in body["results"]] == [1, 0]
     assert _post(f"{server}/v1/rerank", b"{bad")[0] == 400
     assert _post(f"{server}/v1/other", b"{}")[0] == 404
+
+
+def test_scoring_failure_logs_type_only(server, monkeypatch, caplog):
+    secret = "document about the user's Suica card"
+
+    def boom(*_args):
+        raise RuntimeError(f"tokenizer failed on {secret}")
+
+    monkeypatch.setattr(rs, "rerank_response", boom)
+    with caplog.at_level("ERROR", logger="rerank-server"):
+        status, _ = _post(f"{server}/v1/rerank", b'{"query":"q","documents":["a"]}')
+    assert status == 500
+    assert "RuntimeError" in caplog.text and secret not in caplog.text
