@@ -5,7 +5,7 @@ Runs JiuwenMemory behind the Agent Memory Leaderboard Add/Search contract on one
 | Service | Address | What it is |
 |---|---|---|
 | AML adapter | `http://127.0.0.1:8200` | `scripts/aml_adapter.py` with `deploy/aml/config.yml`: `GET` health, `POST /add`, `POST /search` |
-| Rerank server | `http://127.0.0.1:8906/v1` | MiniLM cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`), Cohere-style `POST /v1/rerank` |
+| Rerank server | `http://127.0.0.1:8906/v1` | `scripts/rerank_server.py`: MiniLM cross-encoder (`cross-encoder/ms-marco-MiniLM-L-6-v2`) on CPU, Cohere-style `POST /v1/rerank` |
 | gpt-4o-mini | `API_BASE` (OpenAI-compatible) | memory extraction during Add |
 | text-embedding-v4 | `EMBED_BASE_URL` (DashScope intl) | 1024-dim embeddings |
 
@@ -16,7 +16,8 @@ Redis / Elasticsearch / Milvus backends configured in `deploy/aml/config.yml`.
 
 ```bash
 python -m venv .venv
-.venv/Scripts/python.exe -m pip install -e ".[dev]" -r evaluation/environment/requirements.txt
+.venv/Scripts/python.exe -m pip install -e ".[dev,rerank]" -r evaluation/environment/requirements.txt \
+  --extra-index-url https://download.pytorch.org/whl/cpu
 cp deploy/aml/.env.example deploy/aml/.env
 ```
 
@@ -26,9 +27,10 @@ Settings in `deploy/aml/.env`:
   `MODEL_NAME=openai/gpt-4o-mini`.
 - `EMBED_API_KEY`: DashScope key for text-embedding-v4.
 - `AML_ADAPTER_KEY`: the key clients send. The start script uses `local-dev-key` when it is empty.
-- `RERANK_SERVER_PYTHON` / `RERANK_SERVER_SCRIPT`: the python (with `sentence-transformers`) and rerank server script
-  that serve `RERANK_BASE_URL`, e.g. lme_kit's `embed_serve.py`. Ignored when `RERANK_BASE_URL` already answers.
-  The server loads MiniLM from the Hugging Face cache (`HF_HUB_OFFLINE=1`).
+- `RERANK_BASE_URL` (default `http://127.0.0.1:8906/v1`): where the rerank server listens. The `rerank` extra
+  installs its dependencies (torch CPU build + transformers). The MiniLM model (~90 MB) downloads from Hugging Face on
+  first start and is cached; `HF_HUB_OFFLINE=1` uses only the cache. `RERANK_SERVER_PYTHON` / `RERANK_SERVER_SCRIPT`
+  optionally run a different python or server script.
 
 Without `deploy/aml/.env` the script falls back to `evaluation/environment/.env`.
 
@@ -39,7 +41,8 @@ powershell -ExecutionPolicy Bypass -File scripts\start-aml-local.ps1
 ```
 
 Starts the rerank server (unless it already answers) and the adapter, waits until both are healthy, then prints
-`ready: ...`. Takes about 15-30 s, mostly loading the reranker model. Logs, pids and the adapter's request ledger go to
+`ready: ...`. Takes about 15-30 s, mostly loading the reranker model (longer on the first start while it downloads).
+The rerank server can also run on its own: `python scripts/rerank_server.py --port 8906`. Logs, pids and the adapter's request ledger go to
 `evaluation\outputs\aml_local\` (`adapter.log.err` has the adapter's log lines).
 
 ```powershell
@@ -52,7 +55,7 @@ Options: `-Port 8200`, `-BindHost 0.0.0.0` (listen beyond localhost), `-EnvFile 
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8200/health      # {"status":"ok"}; any GET path, no key needed
-Invoke-RestMethod http://127.0.0.1:8906/v1          # rerank server stats (it also serves bge embeddings, unused here)
+Invoke-RestMethod http://127.0.0.1:8906/v1          # {"status":"ok","model":"cross-encoder/ms-marco-MiniLM-L-6-v2"}
 Get-Content evaluation\outputs\aml_local\adapter.log.err -Tail 20 -Wait   # follow the adapter log
 ```
 

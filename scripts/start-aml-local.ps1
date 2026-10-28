@@ -4,9 +4,10 @@
 #   powershell -ExecutionPolicy Bypass -File scripts\start-aml-local.ps1          # start, wait until healthy
 #   powershell -ExecutionPolicy Bypass -File scripts\start-aml-local.ps1 -Stop    # stop what it started
 #
-# Settings come from deploy\aml\.env (falls back to evaluation\environment\.env). Besides the usual
-# model keys it reads RERANK_SERVER_PYTHON / RERANK_SERVER_SCRIPT: the python (with sentence-transformers)
-# and the embed_serve.py that serve RERANK_BASE_URL. If the reranker already answers, it is left alone.
+# Settings come from deploy\aml\.env (falls back to evaluation\environment\.env). The reranker is
+# scripts\rerank_server.py on the port of RERANK_BASE_URL, run with the same python as the adapter
+# (needs pip install -e ".[rerank]"). RERANK_SERVER_PYTHON / RERANK_SERVER_SCRIPT override that.
+# If the reranker already answers, it is left alone.
 # Logs, pids and the adapter ledger go to evaluation\outputs\aml_local\ (git-ignored).
 # Kept ASCII-only so Windows PowerShell 5.1 reads it correctly without a BOM.
 param(
@@ -72,20 +73,22 @@ if (-not $Python) { $Python = Join-Path $Root ".venv\Scripts\python.exe" }
 if (-not (Test-Path $Python)) { throw "python not found: $Python (create .venv and pip install -e "".[dev]"")" }
 
 $pids = @{}
+if (-not $env:RERANK_BASE_URL) { $env:RERANK_BASE_URL = "http://127.0.0.1:8906/v1" }
+if (-not $env:RERANK_API_KEY) { $env:RERANK_API_KEY = "local" }
 $rerankUrl = $env:RERANK_BASE_URL.TrimEnd("/")
 if (Test-Up $rerankUrl) {
     Write-Host "reranker already up: $rerankUrl"
 } else {
-    if (-not $env:RERANK_SERVER_PYTHON -or -not $env:RERANK_SERVER_SCRIPT) {
-        throw "reranker not reachable at $rerankUrl and RERANK_SERVER_PYTHON / RERANK_SERVER_SCRIPT are not set"
-    }
+    $rerankPython = if ($env:RERANK_SERVER_PYTHON) { $env:RERANK_SERVER_PYTHON } else { $Python }
+    $rerankScript = if ($env:RERANK_SERVER_SCRIPT) { $env:RERANK_SERVER_SCRIPT } else { Join-Path $Root "scripts\rerank_server.py" }
     $rerankPort = ([Uri]$rerankUrl).Port
     $log = Join-Path $RunDir "reranker.log"
-    $p = Start-Process -FilePath $env:RERANK_SERVER_PYTHON -ArgumentList "`"$($env:RERANK_SERVER_SCRIPT)`"", "--port", $rerankPort `
+    $p = Start-Process -FilePath $rerankPython -ArgumentList "`"$rerankScript`"", "--port", $rerankPort `
         -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
     $pids.reranker = $p.Id
     $pids | ConvertTo-Json | Set-Content $PidFile
-    Wait-Up "reranker" $rerankUrl 180 $p "$log.err"
+    # First start downloads the model (~90 MB), hence the long wait.
+    Wait-Up "reranker" $rerankUrl 600 $p "$log.err"
 }
 
 $adapterUrl = "http://${BindHost}:$Port"

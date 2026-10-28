@@ -38,6 +38,13 @@ embed = [
     # transformers 5.x 移除了 FlagReranker 仍调用的 prepare_for_model，会令 bge reranker 崩；固定在 4.x。
     "transformers>=4.39,<5",
 ]
+# Local cross-encoder rerank server (scripts/rerank_server.py). Calls transformers directly, so it
+# works with both 4.x and 5.x and stays compatible with the embed extra. For a CPU-only torch use
+# --extra-index-url https://download.pytorch.org/whl/cpu.
+rerank = [
+    "torch>=2.0",
+    "transformers>=4.39",
+]
 multimodal = [
     "dashscope>=1.24.0",
     # video_asr 归一化经 HTTP 拉取转写结果（函数级惰性 import）。
