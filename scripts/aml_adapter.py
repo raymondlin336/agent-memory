@@ -28,6 +28,8 @@ import json
 import logging
 import math
 import os
+import re
+import signal
 import sqlite3
 import sys
 import threading
@@ -54,7 +56,7 @@ from jiuwen_memory.api import (  # noqa: E402
     build_dev_authenticator,
     internal_context,
 )
-from jiuwen_memory.common.type_def import Context, Scope  # noqa: E402
+from jiuwen_memory.common.type_def import Context, FilterClause, FilterOp, Scope  # noqa: E402
 from jiuwen_memory.config import Config  # noqa: E402
 from jiuwen_memory.retrieval.types import DisclosureLevel  # noqa: E402
 
@@ -73,6 +75,9 @@ MAX_BODY_BYTES = 64 * 1024 * 1024
 DATE_PREFIX = os.environ.get("AML_DATE_PREFIX", "1") == "1"
 OPTIONS_IN_QUERY = os.environ.get("AML_OPTIONS_IN_QUERY", "0") == "1"
 NO_SOURCE = os.environ.get("AML_NO_SOURCE", "1") == "1"
+# 单次 Add 的软截止：AML 单请求最长 30 分钟，超过这个时长就在 group 边界回 503，
+# 让 AML 重试并从账本断点续写，而不是被它硬判超时。
+ADD_DEADLINE_S = float(os.environ.get("AML_ADD_DEADLINE_S", "1500"))
 DIALOGUE_TURN_MAX_CHARS = int(os.environ.get("AML_DIALOGUE_TURN_MAX_CHARS", "4096"))
 # Add 动辄数分钟，Search 很短；分池避免长 Add 占满槽位把 Search 挤成 429。
 _add_slots = threading.BoundedSemaphore(int(os.environ.get("AML_MAX_ADD_CONCURRENCY", "8")))
@@ -124,33 +129,49 @@ class Ledger:
             "CREATE TABLE IF NOT EXISTS requests ("
             " user_id TEXT NOT NULL, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL,"
             " groups_done INTEGER NOT NULL DEFAULT 0, done INTEGER NOT NULL DEFAULT 0,"
-            " updated_at REAL NOT NULL, PRIMARY KEY (user_id, request_id))"
+            " updated_at REAL NOT NULL, in_progress INTEGER NOT NULL DEFAULT -1,"
+            " PRIMARY KEY (user_id, request_id))"
         )
+        with contextlib.suppress(sqlite3.OperationalError):  # 旧库补列
+            self._db.execute(
+                "ALTER TABLE requests ADD COLUMN in_progress INTEGER NOT NULL DEFAULT -1"
+            )
 
-    def begin(self, uid: str, rid: str, payload_hash: str) -> tuple[bool, int]:
-        """返回 ``(已完成, 已写入的 group 数)``；不存在或内容变化则新建 / 重置。"""
+    def begin(self, uid: str, rid: str, payload_hash: str) -> tuple[bool, int, int]:
+        """返回 ``(已完成, 已写入的 group 数, 写到一半的 group 下标或 -1)``。
+
+        不存在或内容变化则新建 / 重置。``in_progress`` 是写前标记：进程在 ``api.add``
+        与进度提交之间崩溃时，它指出哪个 group 可能已落库但没记账。
+        """
         with self._lock:
             row = self._db.execute(
-                "SELECT payload_hash, groups_done, done FROM requests"
+                "SELECT payload_hash, groups_done, done, in_progress FROM requests"
                 " WHERE user_id=? AND request_id=?",
                 (uid, rid),
             ).fetchone()
             if row is not None and row[0] == payload_hash:
-                return bool(row[2]), int(row[1])
+                return bool(row[2]), int(row[1]), int(row[3])
             if row is not None:
                 logger.warning(
                     "request_id reused with different payload, resetting user=%s rid=%s", uid, rid
                 )
             self._db.execute(
-                "INSERT OR REPLACE INTO requests VALUES (?, ?, ?, 0, 0, ?)",
+                "INSERT OR REPLACE INTO requests VALUES (?, ?, ?, 0, 0, ?, -1)",
                 (uid, rid, payload_hash, time.time()),
             )
-            return False, 0
+            return False, 0, -1
+
+    def mark_started(self, uid: str, rid: str, group_index: int) -> None:
+        with self._lock:
+            self._db.execute(
+                "UPDATE requests SET in_progress=? WHERE user_id=? AND request_id=?",
+                (group_index, uid, rid),
+            )
 
     def progress(self, uid: str, rid: str, groups_done: int, *, done: bool = False) -> None:
         with self._lock:
             self._db.execute(
-                "UPDATE requests SET groups_done=?, done=?, updated_at=?"
+                "UPDATE requests SET groups_done=?, done=?, updated_at=?, in_progress=-1"
                 " WHERE user_id=? AND request_id=?",
                 (groups_done, int(done), time.time(), uid, rid),
             )
@@ -285,6 +306,40 @@ _user_locks: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 _user_locks_guard = threading.Lock()
 
 
+_SAFE_USER_ID = re.compile(r"[A-Za-z0-9_.@-]{1,128}")
+
+
+def scope_user(uid: str) -> str:
+    """AML ``user_id`` → 引擎 ``Scope.user``（单射）。
+
+    ``user_id`` 是唯一隔离边界，而引擎把它拼进 Redis 键、ES / Milvus 过滤表达式。引号、斜杠、
+    通配符、控制字符等不受控字符一旦进入这些后端语法，隔离就依赖各后端的转义是否完备。
+    因此只放行保守字符集（加 ``u-`` 前缀），其余一律取 SHA-256 前 160 位（加 ``x-`` 前缀）；
+    两个前缀互不相交，映射保持单射。
+    """
+    if _SAFE_USER_ID.fullmatch(uid) and uid not in {".", ".."}:
+        return f"u-{uid}"
+    return "x-" + hashlib.sha256(uid.encode("utf-8")).hexdigest()[:40]
+
+
+def _group_written(scope: Scope, seed_key: str) -> bool:
+    """崩溃恢复：引擎里是否已有携带该 ``seed_key`` 的记忆（派生记忆继承写入 metadata）。
+
+    查询失败按“未写入”处理——宁可重复一个 group，也不丢数据。
+    """
+    try:
+        res = api.list(
+            scope,
+            security=_security(),
+            limit=1,
+            filters=[FilterClause("seed_key", FilterOp.EQ, seed_key)],
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("seed_key probe failed, will rewrite seed_key=%s", seed_key, exc_info=True)
+        return False
+    return bool(res.items)
+
+
 def _user_lock(uid: str) -> threading.Lock:
     with _user_locks_guard:
         return _user_locks[uid]
@@ -307,14 +362,24 @@ def handle_add(req: Any) -> dict:
     try:
         # 同一 user 的写入串行：保持 chunk 顺序，避免并发抽取/去重互相干扰。
         with _user_lock(parsed.user_id):
-            done, start = _ledger.begin(parsed.user_id, parsed.request_id, parsed.payload_hash)
+            done, start, crashed = _ledger.begin(
+                parsed.user_id, parsed.request_id, parsed.payload_hash
+            )
             if done:
                 logger.info("add replay user=%s rid=%s", parsed.user_id, parsed.request_id)
                 return _echo(parsed)
             groups = build_groups(parsed)
-            scope = Scope(org=ORG, user=parsed.user_id)
+            scope = Scope(org=ORG, user=scope_user(parsed.user_id))
             for gi in range(start, len(groups)):
                 group = groups[gi]
+                if time.monotonic() - started > ADD_DEADLINE_S:
+                    raise HttpError(503, "add deadline reached, retry to resume", retry_after=1)
+                if gi == crashed and _group_written(scope, group.metadata["seed_key"]):
+                    logger.info("group already persisted, skipping rid=%s group=%d",
+                                parsed.request_id, gi)
+                    _ledger.progress(parsed.user_id, parsed.request_id, gi + 1)
+                    continue
+                _ledger.mark_started(parsed.user_id, parsed.request_id, gi)
                 api.add(
                     group.content,
                     scope,
@@ -365,7 +430,7 @@ def handle_search(req: Any) -> dict:
     options = req.get("options")
     if OPTIONS_IN_QUERY and isinstance(options, list) and options:
         query = f"{query}\n" + "\n".join(map(str, options))
-    scope = Scope(org=ORG, user=uid)
+    scope = Scope(org=ORG, user=scope_user(uid))
     security = _security()
     res = api.search(query, Context(scope), security=security, top_k=top_k,
                      disclosure=DisclosureLevel.L2)
@@ -434,6 +499,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         path = self.path.split("?", 1)[0].rstrip("/")
         route = {"/add": handle_add, "/search": handle_search}.get(path)
+        # 先把请求体读完再决定回什么：带着未读完的请求体就关连接，客户端会收到连接重置
+        # 而不是 401 / 404 / 429 状态码，AML 就无法按状态码分类重试。
+        try:
+            raw = self._read_body()
+        except HttpError as exc:
+            self._send(exc.status, {"error": exc.message})
+            return
+        except (ValueError, OSError):
+            self._send(400, {"error": "malformed request body"})
+            return
         if route is None:
             self._send(404, {"error": "not found"})
             return
@@ -446,7 +521,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             try:
-                body = json.loads(self._read_body())
+                body = json.loads(raw)
             except (ValueError, UnicodeDecodeError) as exc:
                 raise HttpError(400, f"invalid JSON: {exc}") from exc
             self._send(200, route(body))
@@ -533,6 +608,13 @@ def main() -> int:
             "aml adapter on http://%s:%s (config=%s no_source=%s)",
             args.host, args.port, args.config, NO_SOURCE,
         )
+        # 容器 / systemd 停机发 SIGTERM：走正常退出路径，让引擎与账本干净关闭。
+        # shutdown() 要在 serve_forever 之外的线程调用，否则死锁。
+        if threading.current_thread() is threading.main_thread():
+            signal.signal(
+                signal.SIGTERM,
+                lambda *_: threading.Thread(target=httpd.shutdown, daemon=True).start(),
+            )
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

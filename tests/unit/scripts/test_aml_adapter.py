@@ -36,6 +36,8 @@ class FakeApi:
     def __init__(self):
         self.adds: list[dict] = []
         self.fail_on_add: int | None = None
+        self.persist_then_fail_on: int | None = None
+        self.list_error: Exception | None = None
         self.items: list = []
         self.units: dict = {}
         self.search_kwargs: dict = {}
@@ -45,7 +47,20 @@ class FakeApi:
             self.fail_on_add = None
             raise RuntimeError("llm down")
         self.adds.append({"content": content, "scope": scope, **kwargs})
+        if self.persist_then_fail_on == len(self.adds) - 1:
+            self.persist_then_fail_on = None
+            raise RuntimeError("crashed after the engine persisted")
         return []
+
+    def list(self, scope, *, filters=None, **kwargs):
+        if self.list_error:
+            raise self.list_error
+        wanted = filters[0].value
+        hits = [
+            a for a in self.adds
+            if a["system_metadata"]["seed_key"] == wanted and a["scope"].user == scope.user
+        ]
+        return SimpleNamespace(items=hits[:1])
 
     def search(self, query, context, **kwargs):
         self.search_kwargs = {"query": query, "scope": context.scope, **kwargs}
@@ -92,7 +107,7 @@ def test_add_echoes_fields_and_writes_dialogue_turns(aml):
         "[user]: I adopted a dog named Rex\n[assistant]: Congrats!",
         "[user]: He is a beagle",
     ], "user+assistant pair must be merged into one dialogue turn, orphan kept single"
-    assert adds[0]["scope"].user == "u1" and adds[0]["scope"].org == aml.ORG
+    assert adds[0]["scope"].user == "u-u1" and adds[0]["scope"].org == aml.ORG
     assert adds[0]["tags"] == ["s1"]
     meta = adds[0]["system_metadata"]
     assert meta["infer"] == "true" and meta["retain_source"] == "false"
@@ -172,7 +187,7 @@ def test_add_request_ids_are_per_user(aml):
     aml.api = FakeApi()
     aml.handle_add(_add_body())
     aml.handle_add(_add_body(user_id="u2"))
-    assert {a["scope"].user for a in aml.api.adds} == {"u1", "u2"}
+    assert {a["scope"].user for a in aml.api.adds} == {"u-u1", "u-u2"}
 
 
 def test_add_inflight_duplicate_gets_409(aml):
@@ -235,7 +250,7 @@ def test_search_shape_cap_and_filters(aml):
     assert out["data"][0]["content"] == "[2023-05-07] first"
     assert out["data"][0]["created_at"] == "2023-05-07T10:00:00"
     assert "created_at" not in out["data"][1] and "score" not in out["data"][1]
-    assert api.search_kwargs["top_k"] == 2 and api.search_kwargs["scope"].user == "u1"
+    assert api.search_kwargs["top_k"] == 2 and api.search_kwargs["scope"].user == "u-u1"
 
 
 def test_search_empty_and_defaults(aml):
@@ -381,3 +396,137 @@ def test_aml_config_pins_benchmark_retrieval_and_immediate_visibility():
         assert store["params"]["refresh"] == "wait_for", f"{name}: ES must refresh on write"
     for store in cfg["vector_store"].values():
         assert store["params"]["dim"] == 1024
+
+
+# ------------------------------------------------ 崩溃恢复 / 截止 / 用户 ID ---
+
+
+def test_crash_between_engine_write_and_ledger_does_not_duplicate(aml):
+    aml.api = FakeApi()
+    aml.api.persist_then_fail_on = 0  # 第一个 group 已落库但没来得及记账
+    with pytest.raises(RuntimeError):
+        aml.handle_add(_add_body())
+    aml.handle_add(_add_body())
+    assert [a["system_metadata"]["seed_key"] for a in aml.api.adds] == ["req-1#0", "req-1#1"], (
+        "the already-persisted group must be detected via seed_key, not written twice"
+    )
+
+
+def test_probe_failure_prefers_duplicate_over_loss(aml):
+    aml.api = FakeApi()
+    aml.api.persist_then_fail_on = 0
+    with pytest.raises(RuntimeError):
+        aml.handle_add(_add_body())
+    aml.api.list_error = RuntimeError("index down")
+    aml.handle_add(_add_body())
+    assert [a["system_metadata"]["seed_key"] for a in aml.api.adds] == [
+        "req-1#0", "req-1#0", "req-1#1"
+    ]
+
+
+def test_add_deadline_returns_503_and_resumes(aml, monkeypatch):
+    aml.api = FakeApi()
+    monkeypatch.setattr(aml, "ADD_DEADLINE_S", -1.0)
+    with pytest.raises(aml.HttpError) as err:
+        aml.handle_add(_add_body())
+    assert err.value.status == 503 and aml.api.adds == []
+    monkeypatch.setattr(aml, "ADD_DEADLINE_S", 1500.0)
+    aml.handle_add(_add_body())
+    assert len(aml.api.adds) == 2
+
+
+def test_scope_user_is_injective_and_backend_safe(aml):
+    safe = aml.scope_user("alice-01")
+    assert safe == "u-alice-01"
+    nasty = ["a/b", "a'b", 'a"b', "*", "..", ".", "a b", "用户", "a\x00b", "x" * 300, "A", "a"]
+    mapped = [aml.scope_user(u) for u in nasty]
+    assert len(set(mapped)) == len(nasty), "distinct user_ids must stay distinct"
+    for value in mapped:
+        assert aml._SAFE_USER_ID.fullmatch(value[2:]) or value.startswith("x-")
+        assert all(c.isalnum() or c in "-_.@" for c in value), value
+    assert aml.scope_user("x-" + "0" * 40) == "u-x-" + "0" * 40, "prefixes keep spaces disjoint"
+
+
+def test_http_chunked_request_body(server):
+    import http.client
+
+    conn = http.client.HTTPConnection(server.split("//")[1], timeout=10)
+    payload = json.dumps(_add_body()).encode()
+    conn.putrequest("POST", "/add")
+    conn.putheader("X-Api-Key", "k")
+    conn.putheader("Transfer-Encoding", "chunked")
+    conn.endheaders()
+    conn.send(f"{len(payload):x}\r\n".encode() + payload + b"\r\n0\r\n\r\n")
+    resp = conn.getresponse()
+    assert resp.status == 200 and json.loads(resp.read())["request_id"] == "req-1"
+
+
+def test_http_rejection_with_body_still_returns_status(server):
+    big = {"request_id": "r", "messages": [{"role": "user", "content": "x" * 2_000_000}]}
+    status, _ = _call(server + "/add", big)  # 无密钥：必须是 401，而不是连接被重置
+    assert status == 401
+
+
+# --------------------------------------------- 真实引擎并发：隔离与不重复 ---
+
+
+def test_real_engine_parallel_users_stay_isolated(aml, monkeypatch):
+    monkeypatch.undo()
+    from concurrent.futures import ThreadPoolExecutor
+
+    from jiuwen_memory.api import assemble_runtime, build_dev_authenticator
+
+    runtime = assemble_runtime()
+    try:
+        aml.api = runtime.api
+        aml._authenticator = build_dev_authenticator()
+        users = [f"user-{i}" for i in range(12)] + ["we/ird'\"id", "用户"]
+
+        def work(uid):
+            for chunk in range(3):
+                aml.handle_add(
+                    _add_body(
+                        request_id=f"{uid}-{chunk}",
+                        user_id=uid,
+                        messages=[
+                            {"role": "user", "content": f"{uid} fact{chunk} zebra",
+                             "timestamp": 1700000000000 + chunk},
+                        ],
+                    )
+                )
+            return uid, aml.handle_search({"query": "zebra", "user_id": uid, "top_k": 50})
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(work, users))
+        for uid, out in results:
+            texts = [d["content"] for d in out["data"]]
+            assert len(texts) == 3, f"{uid}: expected its own 3 memories, got {len(texts)}"
+            assert all(uid in t for t in texts), f"{uid}: foreign memory leaked into results"
+    finally:
+        runtime.close()
+
+
+def test_real_engine_same_user_concurrent_adds_no_duplicates(aml, monkeypatch):
+    monkeypatch.undo()
+    from concurrent.futures import ThreadPoolExecutor
+
+    from jiuwen_memory.api import assemble_runtime, build_dev_authenticator
+
+    runtime = assemble_runtime()
+    try:
+        aml.api = runtime.api
+        aml._authenticator = build_dev_authenticator()
+
+        def add(i):
+            # 同一个 request_id 被并发重试：只能写一次，其余要么 409 要么直接重放 200
+            try:
+                aml.handle_add(_add_body(messages=[{"role": "user", "content": "one fact lemur"}]))
+            except aml.HttpError as exc:
+                assert exc.status == 409
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            list(pool.map(add, range(6)))
+        out = aml.handle_search({"query": "lemur", "user_id": "u1", "top_k": 50})
+        assert len(out["data"]) == 1, f"retries duplicated the memory: {len(out['data'])}"
+    finally:
+        runtime.close()

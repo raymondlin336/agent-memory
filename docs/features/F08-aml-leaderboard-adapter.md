@@ -4,9 +4,9 @@
 
 | 项 | 值 |
 |---|---|
-| 日期 | 2026-10-27 |
+| 日期 | 2026-10-28 |
 | 影响范围 | `scripts/aml_adapter.py`、`scripts/run-aml.sh`、`deploy/aml/config.yml`、`deploy/aml/.env.example`、`tests/unit/scripts/test_aml_adapter.py`；不改 `jiuwen_memory/` 内核 |
-| 测试基线 | `tests/unit/scripts/test_aml_adapter.py` 38 项全绿（含一项走真实内存引擎的授权链路）；`ruff check` 通过。未对真实 Redis / ES / Milvus / LLM 做端到端联调 |
+| 测试基线 | `tests/unit/scripts/test_aml_adapter.py` 47 项全绿（含三项走真实内存引擎：授权链路、14 个用户并行隔离、同 ID 并发重试不重复）；`ruff check` 通过。未对真实 Redis / ES / Milvus / LLM 做端到端联调 |
 | Refs | 无（issue 号待确认） |
 
 ## 背景
@@ -59,7 +59,19 @@ Agent Memory Leaderboard（AML）Cycle 2 开源赛道要求参赛方托管 HTTP 
     槽位满回 429 + `Retry-After`。
 13. **鉴权**：`Authorization: <任意 scheme> <key>`（Token / Bearer）或 `X-Api-Key`，任一匹配；
     `AML_ADAPTER_KEY` 未设置默认拒绝启动（`AML_ALLOW_NO_AUTH=1` 仅限本地调试）。健康检查任意路径 GET 免鉴权。
-14. **HTTP**：支持 chunked 请求体、64 MiB 上限、socket 读写 120 秒超时（处理耗时不限）；
+14. **`user_id` → `Scope.user` 单射映射**（`scope_user`）：`user_id` 是唯一隔离边界，而引擎把它拼进
+    Redis 键、ES / Milvus 过滤表达式。仅放行 `[A-Za-z0-9_.@-]{1,128}`（加 `u-` 前缀），其余（引号、斜杠、
+    通配符、控制字符、超长、非 ASCII）取 SHA-256 前 160 位（加 `x-` 前缀）。内存引擎实测各类怪异 id 本就隔离，
+    但真后端的转义无法在此验证，映射把整类风险消除；代价是存储里看到的 user 带前缀。
+15. **崩溃窗口（引擎已写、账本未记）**：账本增加写前标记 `in_progress`；重试遇到该 group 时，先用 `seed_key`
+    （派生记忆继承写入 metadata，见 `inherited_system_metadata`）在引擎里探测是否已落库，已落库则跳过。
+    探测本身失败按“未写入”处理——宁可重复一个 group，也不丢数据。
+16. **Add 软截止**（`AML_ADD_DEADLINE_S`，默认 1500 秒）：在 group 边界超时就回 503，让 AML 重试并从账本续写，
+    而不是被 AML 的 30 分钟上限硬判失败。
+17. **先读完请求体再回复**：401 / 404 / 429 若不读请求体就关连接，客户端会收到连接重置而不是状态码，AML 就
+    无法按状态码分类。读体上限 64 MiB。
+18. **SIGTERM 走正常退出**，引擎与账本干净关闭。
+19. **HTTP**：支持 chunked 请求体、64 MiB 上限、socket 读写 120 秒超时（处理耗时不限）；
     客户端提前断开时写响应失败只记日志，写入已记账，AML 重试命中账本回 200。
 
 ## 拒绝的方案
@@ -81,10 +93,10 @@ Agent Memory Leaderboard（AML）Cycle 2 开源赛道要求参赛方托管 HTTP 
 
 - **未联调真实后端**：Redis / ES / Milvus / gpt-4o-mini / text-embedding-v4 / MiniLM rerank 服务的端到端
   与延迟、`wait_for` 带来的写入开销均未实测。
-- **账本与引擎写入之间有极小窗口**：某 group 已写入引擎、账本尚未提交时进程崩溃，重试会重复写该 group。
-  账本文件丢失则全部重试都会重复写入。
-- **`user_id` 字符集**：`Scope.user` 对特殊字符 / 超长 id 的限制未验证，非法值会得到 422。
-- **引擎多线程安全**：依据评测 harness 已按 scope 并发运行，但未对同一进程内高并发 Add + Search 压测。
+- **崩溃窗口的探测依赖 `seed_key` 被派生记忆继承**：抽取被去重吸收（UPDATE / NOOP）或零产出时，引擎里查不到该
+  `seed_key`，重试会重新抽取一次（多一次 LLM 调用，去重会再吸收，不产生重复记忆）。账本文件丢失则全部重试都会重复写入。
+- **并发只在内存引擎上验证**：14 个用户 × 8 线程并行 Add + Search 无泄漏、无重复；真实 Redis / ES / Milvus 下的并发
+  与限流表现、LLM / embedding / rerank 服务的限速未测。
 - **配置需手工同步**：`deploy/aml/config.yml` 内联自 aml-benchmark 工作树里尚未提交的调优版
   `evaluation/longmemeval/config.yml`（取自 2026-10-27 的快照）。基准配置再调整时须同步检索段；
   `config_loader` 的 `extends` 支持合入后可改回继承以消除重复。
