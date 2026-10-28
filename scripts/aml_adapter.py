@@ -595,7 +595,14 @@ def main() -> int:
             from evaluation.longmemeval.no_source import no_source_extraction
 
             stack.enter_context(no_source_extraction())  # 进程生命周期内生效
-        runtime = assemble_runtime(config=Config.from_dict(dict(layer.get("memory_api") or layer)))
+        memory_cfg = dict(layer.get("memory_api") or layer)
+        if os.environ.get("AML_IN_MEMORY") == "1":
+            # 无 Docker 本地模式（同 evaluation/longmemeval/config.memory.yml）：去掉 Redis / ES /
+            # Milvus 段，内核回落到进程内存储。数据随进程消失，只用于本地联调，不能用于正式提交。
+            for namespace in ("kv_store", "fulltext_store", "vector_store"):
+                memory_cfg.pop(namespace, None)
+            logger.warning("AML_IN_MEMORY=1：使用进程内存储，重启即丢数据")
+        runtime = assemble_runtime(config=Config.from_dict(memory_cfg))
         stack.callback(runtime.close)
         api = runtime.api
         _authenticator = build_dev_authenticator()

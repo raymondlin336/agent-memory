@@ -6,7 +6,7 @@
 |---|---|
 | 日期 | 2026-10-28 |
 | 影响范围 | `scripts/aml_adapter.py`、`scripts/run-aml.sh`、`deploy/aml/config.yml`、`deploy/aml/.env.example`、`tests/unit/scripts/test_aml_adapter.py`；不改 `jiuwen_memory/` 内核 |
-| 测试基线 | `tests/unit/scripts/test_aml_adapter.py` 47 项全绿（含三项走真实内存引擎：授权链路、14 个用户并行隔离、同 ID 并发重试不重复）；`ruff check` 通过。未对真实 Redis / ES / Milvus / LLM 做端到端联调 |
+| 测试基线 | `tests/unit/scripts/test_aml_adapter.py` 47 项全绿（含三项走真实内存引擎：授权链路、14 个用户并行隔离、同 ID 并发重试不重复）；`ruff check` 通过。2026-10-28 已在本机以 `AML_IN_MEMORY=1` + 真实 gpt-4o-mini / text-embedding-v4 / 本地 MiniLM 精排冒烟通过（健康检查、401、Add 200、Search 命中且按用户隔离、重放 Add 回 200）；真实 Redis / ES / Milvus 未联调 |
 | Refs | 无（issue 号待确认） |
 
 ## 背景
@@ -71,7 +71,9 @@ Agent Memory Leaderboard（AML）Cycle 2 开源赛道要求参赛方托管 HTTP 
 17. **先读完请求体再回复**：401 / 404 / 429 若不读请求体就关连接，客户端会收到连接重置而不是状态码，AML 就
     无法按状态码分类。读体上限 64 MiB。
 18. **SIGTERM 走正常退出**，引擎与账本干净关闭。
-19. **HTTP**：支持 chunked 请求体、64 MiB 上限、socket 读写 120 秒超时（处理耗时不限）；
+19. **`AML_IN_MEMORY=1` 无 Docker 本地模式**：启动时去掉 `kv_store` / `fulltext_store` / `vector_store` 三段，内核回落进程内存储
+    （等同评测的 `config.memory.yml`）。数据随进程消失，仅用于本地联调；正式提交必须用真后端。
+20. **HTTP**：支持 chunked 请求体、64 MiB 上限、socket 读写 120 秒超时（处理耗时不限）；
     客户端提前断开时写响应失败只记日志，写入已记账，AML 重试命中账本回 200。
 
 ## 拒绝的方案
