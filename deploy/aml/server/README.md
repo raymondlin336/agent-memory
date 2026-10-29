@@ -194,5 +194,9 @@ Run end to end under Docker (Docker Desktop on WSL2, engine 29.9.2, Compose 5.6.
 five containers, `check` passed (health, 401, 404, Add, Search, user isolation) on the real Redis / Elasticsearch /
 Milvus stores, and `durability` passed (a memory written before restarting every container was found afterwards, and
 the retried Add was answered from the ledger). Recreating the containers (as `up` does after a settings or code
-change) kept the data and the log limits applied. Not yet exercised: a Linux host, the `caddy` HTTPS profile, a
+change) kept the data and the log limits applied. Failure tests with LongMemEval questions running: hard-killing the adapter, Milvus, Redis and
+Elasticsearch one at a time (each restarted on its own), and restarting every container at once twice in the middle of
+writes, lost no stored memories, created no duplicates, and let interrupted Adds resume from the ledger; every question
+finished with scores matching the run without failures. On Docker Desktop for Windows the published host port can take
+minutes to reconnect after a container restart (inside the compose network the adapter is back within seconds). Not yet exercised: a Linux host, the `caddy` HTTPS profile, a
 proxy in front, and a full leaderboard-sized load.

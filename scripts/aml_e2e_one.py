@@ -22,6 +22,7 @@ adapter key comes from ``AML_ADAPTER_KEY`` in the same env file (required).
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -44,6 +45,10 @@ from evaluation.longmemeval.metrics.llm_judge import (  # noqa: E402
 DATE_FMT = "%Y/%m/%d (%a) %H:%M"
 CHUNK = 20  # AML sends at most 20 messages per Add
 RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504, 524}
+# HTTPError is a URLError subclass; post() handles it first.
+_TRANSPORT_ERRORS = (
+    urllib.error.URLError, ConnectionError, TimeoutError, http.client.HTTPException,
+)
 
 
 def load_env(path: str) -> None:
@@ -56,8 +61,9 @@ def load_env(path: str) -> None:
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
-def post(url: str, body: dict, key: str, attempts: int = 6) -> dict:
-    """POST JSON, retrying with backoff on the status codes AML retries."""
+def post(url: str, body: dict, key: str, attempts: int = 8) -> dict:
+    """POST JSON, retrying with bounded backoff like AML: on its retryable status codes and on
+    transport failures (connection refused / reset, dropped responses, timeouts)."""
     data = json.dumps(body).encode("utf-8")
     for attempt in range(1, attempts + 1):
         req = urllib.request.Request(
@@ -68,12 +74,21 @@ def post(url: str, body: dict, key: str, attempts: int = 6) -> dict:
             with urllib.request.urlopen(req, timeout=1800) as resp:
                 return json.loads(resp.read())
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:300]
+            try:
+                detail = exc.read().decode("utf-8", "replace")[:300]
+            except _TRANSPORT_ERRORS:  # connection dropped while reading the error body
+                detail = "(error body lost: connection dropped)"
             if exc.code not in RETRY_STATUS or attempt == attempts:
                 raise RuntimeError(f"{url} -> {exc.code}: {detail}") from exc
-            wait = int(exc.headers.get("Retry-After") or 2 ** attempt)
-            print(f"  {exc.code} on attempt {attempt}, retrying in {wait}s: {detail}")
-            time.sleep(wait)
+            wait = int(exc.headers.get("Retry-After") or min(2 ** attempt, 60))
+            print(f"  {exc.code} on attempt {attempt}, retrying in {wait}s: {detail}", flush=True)
+        except _TRANSPORT_ERRORS as exc:
+            if attempt == attempts:
+                raise RuntimeError(f"{url} -> transport failure: {exc!r}") from exc
+            wait = min(2 ** attempt, 60)
+            print(f"  transport failure on attempt {attempt} ({type(exc).__name__}), "
+                  f"retrying in {wait}s", flush=True)
+        time.sleep(wait)
     raise AssertionError("unreachable")
 
 

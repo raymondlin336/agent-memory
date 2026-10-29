@@ -20,6 +20,9 @@ x-logging: &default-logging
 services:
   redis:
     logging: *default-logging
+    # Small init as PID 1: forwards signals and makes a crash of the service exit the container,
+    # so restart: unless-stopped brings it back.
+    init: true
     image: redis:7-alpine
     # Append-only file, fsync every second: at most ~1 s of writes lost on a crash.
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
@@ -73,6 +76,9 @@ services:
 
   rerank:
     logging: *default-logging
+    # Small init as PID 1: forwards signals and makes a crash of the service exit the container,
+    # so restart: unless-stopped brings it back.
+    init: true
     build:
       context: ../../..
       dockerfile: deploy/aml/server/Dockerfile.rerank
@@ -84,6 +90,9 @@ services:
 
   adapter:
     logging: *default-logging
+    # Small init as PID 1: forwards signals and makes a crash of the service exit the container,
+    # so restart: unless-stopped brings it back.
+    init: true
     build:
       context: ../../..
       dockerfile: deploy/aml/server/Dockerfile.adapter
