@@ -204,7 +204,7 @@ persistent disk, since deleting the ledger makes AML's retried Adds write twice.
 read access to the checkout first, e.g. `sudo useradd --system --no-create-home aml`.
 
 AML only connects to public HTTPS endpoints. Keep the adapter on `127.0.0.1` and put a TLS reverse proxy in front of
-it. The proxy must allow requests to run for up to 30 minutes (AML's per-request limit) and must not buffer or reject
+it (the full proxy requirements are listed in [server/README.md](server/README.md), step 6). The proxy must allow requests to run for up to 30 minutes (AML's per-request limit) and must not buffer or reject
 large bodies; with nginx, for example:
 
 ```nginx

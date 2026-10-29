@@ -93,10 +93,10 @@ add_body() {  # request_id user_id text
 
 search_body() { printf '{"query":"%s","user_id":"%s","top_k":5}' "$1" "$2"; }
 
-post() {  # path body -> prints body; sets CODE
+post() {  # path body -> sets BODY and CODE (call directly, not in $(...), so both are visible)
   local out; out="$(curl -s -m 1800 -w '\n%{http_code}' -X POST "$BASE$1" \
     -H "Authorization: Bearer $(envval AML_ADAPTER_KEY)" -H "Content-Type: application/json" -d "$2" || true)"
-  CODE="${out##*$'\n'}"; printf '%s' "${out%$'\n'*}"
+  CODE="${out##*$'\n'}"; BODY="${out%$'\n'*}"
 }
 
 cmd_check() {
@@ -110,13 +110,13 @@ cmd_check() {
   [[ "$code" == "404" ]] && ok "unknown path (404)" || bad "unknown path returned $code, expected 404"
   local user body
   user="check-$(date +%s)"
-  body="$(post /add "$(add_body "$user-1" "$user" "I just adopted a beagle named Biscuit last Saturday.")")"
+  post /add "$(add_body "$user-1" "$user" "I just adopted a beagle named Biscuit last Saturday.")"; body="$BODY"
   if [[ "$CODE" == "200" && "$body" == *'"success": true'* && "$body" == *"\"$user-1\""* ]]; then ok "Add stored and echoed the IDs"
   else bad "Add returned $CODE: ${body:0:300}"; fi
-  body="$(post /search "$(search_body "What is the name of my dog?" "$user")")"
+  post /search "$(search_body "What is the name of my dog?" "$user")"; body="$BODY"
   if [[ "$CODE" == "200" && "$body" == *Biscuit* ]]; then ok "Search found the memory"
   else bad "Search returned $CODE: ${body:0:300}"; fi
-  body="$(post /search "$(search_body "What is the name of my dog?" "$user-other")")"
+  post /search "$(search_body "What is the name of my dog?" "$user-other")"; body="$BODY"
   [[ "$CODE" == "200" && "$body" == *'"data": []'* ]] && ok "another user_id sees nothing" || bad "isolation: ${body:0:200}"
   local domain; domain="$(envval AML_DOMAIN)"
   if [[ -n "$domain" ]]; then
@@ -131,15 +131,15 @@ cmd_durability() {
   [[ "$(http_code "$BASE/health")" == "200" ]] || die "adapter not reachable; run ./aml-server.sh up first"
   local user body
   user="durable-$(date +%s)"
-  body="$(post /add "$(add_body "$user-1" "$user" "My locker at the gym is number 4417.")")"
+  post /add "$(add_body "$user-1" "$user" "My locker at the gym is number 4417.")"; body="$BODY"
   [[ "$CODE" == "200" ]] && ok "Add stored" || { bad "Add returned $CODE: ${body:0:300}"; return 1; }
   say "restarting all services (takes a minute or two)"
   compose restart
   wait_healthy 900 || { bad "stack did not come back"; return 1; }
-  body="$(post /search "$(search_body "What is my gym locker number?" "$user")")"
+  post /search "$(search_body "What is my gym locker number?" "$user")"; body="$BODY"
   [[ "$CODE" == "200" && "$body" == *4417* ]] && ok "memory survived the restart" || bad "memory missing after restart: ${body:0:300}"
   local t0=$SECONDS
-  body="$(post /add "$(add_body "$user-1" "$user" "My locker at the gym is number 4417.")")"
+  post /add "$(add_body "$user-1" "$user" "My locker at the gym is number 4417.")"; body="$BODY"
   if [[ "$CODE" == "200" ]] && (( SECONDS - t0 < 5 )); then ok "retried Add answered from the ledger (not stored twice)"
   else bad "retried Add returned $CODE after $((SECONDS - t0)) s"; fi
   (( FAILED == 0 )) && say "durability check passed" || { say "durability check failed"; return 1; }

@@ -1,5 +1,5 @@
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-# AML server stack: adapter + MiniLM rerank server + Redis / Elasticsearch / Milvus (etcd, MinIO).
+# AML server stack: adapter + MiniLM rerank server + Redis / Elasticsearch / Milvus (embedded mode).
 #
 # Run through ./aml-server.sh (it passes --env-file ../.env), or directly from this directory:
 #   docker compose --env-file ../.env up -d --build
@@ -10,8 +10,16 @@
 # With AML_DOMAIN set, the optional "https" profile adds Caddy on ports 80/443 with automatic TLS.
 name: aml
 
+# Cap container logs (Docker keeps them forever by default): 5 files x 50 MB per container.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   redis:
+    logging: *default-logging
     image: redis:7-alpine
     # Append-only file, fsync every second: at most ~1 s of writes lost on a crash.
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
@@ -25,6 +33,7 @@ services:
     restart: unless-stopped
 
   elasticsearch:
+    logging: *default-logging
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
     environment:
       - discovery.type=single-node
@@ -40,57 +49,20 @@ services:
       start_period: 60s
     restart: unless-stopped
 
-  etcd:
-    image: quay.io/coreos/etcd:v3.5.5
-    environment:
-      - ETCD_AUTO_COMPACTION_MODE=revision
-      - ETCD_AUTO_COMPACTION_RETENTION=1000
-      - ETCD_QUOTA_BACKEND_BYTES=4294967296
-      - ETCD_SNAPSHOT_COUNT=50000
-    command:
-      - etcd
-      - -advertise-client-urls=http://127.0.0.1:2379
-      - -listen-client-urls=http://0.0.0.0:2379
-      - --data-dir=/etcd
-    volumes:
-      - etcd-data:/etcd
-    healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-
-  minio:
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
-    # Internal object store for Milvus only; not published, so the default credentials never leave
-    # the compose network.
-    environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    command: minio server /minio_data --console-address ":9001"
-    volumes:
-      - minio-data:/minio_data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    restart: unless-stopped
-
   milvus:
+    logging: *default-logging
+    # Embedded mode: Milvus runs its own etcd and keeps files on local disk, so no separate etcd or
+    # object-store containers are needed. Everything persists in the milvus-data volume.
     image: milvusdb/milvus:v2.4.13
     command: ["milvus", "run", "standalone"]
     environment:
-      ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: /var/lib/milvus/etcd
+      ETCD_CONFIG_PATH: /milvus/configs/embedEtcd.yaml
+      COMMON_STORAGETYPE: local
     volumes:
       - milvus-data:/var/lib/milvus
-    depends_on:
-      etcd:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+      - ./milvus-embedEtcd.yaml:/milvus/configs/embedEtcd.yaml:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
       interval: 30s
@@ -100,6 +72,7 @@ services:
     restart: unless-stopped
 
   rerank:
+    logging: *default-logging
     build:
       context: ../../..
       dockerfile: deploy/aml/server/Dockerfile.rerank
@@ -110,6 +83,7 @@ services:
     restart: unless-stopped
 
   adapter:
+    logging: *default-logging
     build:
       context: ../../..
       dockerfile: deploy/aml/server/Dockerfile.adapter
@@ -145,6 +119,7 @@ services:
     restart: unless-stopped
 
   caddy:
+    logging: *default-logging
     profiles: ["https"]
     image: caddy:2.8.4
     environment:
@@ -164,8 +139,6 @@ services:
 volumes:
   redis-data:
   es-data:
-  etcd-data:
-  minio-data:
   milvus-data:
   adapter-data:
   caddy-data:
