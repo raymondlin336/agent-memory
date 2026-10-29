@@ -482,6 +482,12 @@ def _build(config):
     hosts = Factory.require_param(config, "hosts", backend="elasticsearch fulltext")
     ssl = read_ssl_config(config, backend="elasticsearch fulltext")
     options: dict[str, Any] = {}
+    # HTTP connections per ES node (elastic-transport default 10). Every concurrent writer holds
+    # one for the whole bulk call, which with refresh=wait_for lasts until the next refresh, so
+    # more writers than connections queue in the client. Size it to the expected concurrency.
+    pool = Factory.cfg_get(config, "connections_per_node")
+    if pool:
+        options["connections_per_node"] = int(pool)
     if ssl.verify:
         # hosts 只承载地址：elasticsearch-py 解析 URL 时不读 query，证书只能走构造参数。
         require_tls_scheme(

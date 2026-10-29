@@ -104,6 +104,8 @@ memory_api:
       target: redis
       params:
         url: "${REDIS_URL:-redis://127.0.0.1:6379/0}"
+  # connections_per_node: client connections per ES node; keep it above the number of
+  # concurrent Adds (AML_MAX_ADD_CONCURRENCY) or writers queue for a connection.
   fulltext_store:
     default:
       target: elasticsearch
@@ -111,18 +113,21 @@ memory_api:
         hosts: "${ES_HOSTS:-http://127.0.0.1:9200}"
         index: "${AML_ES_FULLTEXT_INDEX:-aml_fulltext}"
         refresh: wait_for
+        connections_per_node: "${AML_ES_CONNECTIONS:-128}"
     layers_l0:
       target: elasticsearch
       params:
         hosts: "${ES_HOSTS:-http://127.0.0.1:9200}"
         index: "${AML_ES_FULLTEXT_INDEX_L0:-aml_fulltext_l0}"
         refresh: wait_for
+        connections_per_node: "${AML_ES_CONNECTIONS:-128}"
     layers_l1:
       target: elasticsearch
       params:
         hosts: "${ES_HOSTS:-http://127.0.0.1:9200}"
         index: "${AML_ES_FULLTEXT_INDEX_L1:-aml_fulltext_l1}"
         refresh: wait_for
+        connections_per_node: "${AML_ES_CONNECTIONS:-128}"
   vector_store:
     default:
       target: milvus

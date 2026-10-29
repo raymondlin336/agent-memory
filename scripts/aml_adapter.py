@@ -616,6 +616,17 @@ def install_log_privacy(handlers) -> None:
         install_privacy_filter(handler)
 
 
+class AdapterHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer with a listen backlog sized for many simultaneous users.
+
+    The stdlib default backlog is 5: when more connections arrive at once than the accept
+    loop has taken, the kernel resets the extra ones (seen as ConnectionResetError at
+    64 concurrent clients). Connections waiting in the backlog cost nothing.
+    """
+
+    request_queue_size = 256
+
+
 def main() -> int:
     global api, _authenticator, _ledger
     logging.basicConfig(
@@ -652,7 +663,7 @@ def main() -> int:
         _ledger = Ledger(os.environ.get("AML_STATE_DB", "aml_adapter_state.db"))
         stack.callback(_ledger.close)
         selfcheck()
-        httpd = ThreadingHTTPServer((args.host, args.port), Handler)
+        httpd = AdapterHTTPServer((args.host, args.port), Handler)
         httpd.daemon_threads = True
         logger.info(
             "aml adapter on http://%s:%s (config=%s no_source=%s)",
