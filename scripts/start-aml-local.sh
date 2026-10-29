@@ -93,7 +93,8 @@ read_key_file EMBED_API_KEY EMBED_API_KEY_FILE
 [[ -n "${API_KEY:-}" ]] || { echo "API_KEY (or API_KEY_FILE) is not set" >&2; exit 1; }
 [[ -n "${EMBED_API_KEY:-}" ]] || { echo "EMBED_API_KEY (or EMBED_API_KEY_FILE) is not set" >&2; exit 1; }
 
-if [[ -z "${AML_ADAPTER_KEY:-}" ]]; then export AML_ADAPTER_KEY=local-dev-key; echo "AML_ADAPTER_KEY not set; using local-dev-key"; fi
+# The key is required on every address; the adapter refuses empty, short or placeholder keys.
+[[ -n "${AML_ADAPTER_KEY:-}" ]] || { echo "AML_ADAPTER_KEY is not set in ${ENV_FILE} (32+ random characters; see deploy/aml/README-linux.md)" >&2; exit 1; }
 export AML_IN_MEMORY="${AML_IN_MEMORY:-1}"
 export AML_STATE_DB="${AML_STATE_DB:-${RUN_DIR}/aml_adapter_state.db}"
 export RERANK_BASE_URL="${RERANK_BASE_URL:-http://127.0.0.1:8906/v1}"

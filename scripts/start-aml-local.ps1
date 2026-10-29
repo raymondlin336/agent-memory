@@ -64,12 +64,8 @@ foreach ($line in Get-Content $EnvFile) {
     $v = $v.Trim().Trim('"').Trim("'")
     if (-not [Environment]::GetEnvironmentVariable($k.Trim())) { Set-Item "env:$($k.Trim())" $v }
 }
-$loopback = @("127.0.0.1", "localhost", "::1") -contains $BindHost
-if (-not $env:AML_ADAPTER_KEY) {
-    # The dev key is only acceptable on loopback; the adapter refuses weak keys on other binds.
-    if (-not $loopback) { throw "AML_ADAPTER_KEY must be set (32+ random characters) to listen on $BindHost" }
-    $env:AML_ADAPTER_KEY = "local-dev-key"; Write-Host "AML_ADAPTER_KEY not set; using local-dev-key"
-}
+# The key is required on every address; the adapter refuses empty, short or placeholder keys.
+if (-not $env:AML_ADAPTER_KEY) { throw "AML_ADAPTER_KEY is not set in $EnvFile (32+ random characters; see deploy\aml\README.md)" }
 if (-not $env:AML_IN_MEMORY) { $env:AML_IN_MEMORY = "1" }
 if (-not $env:AML_STATE_DB) { $env:AML_STATE_DB = Join-Path $RunDir "aml_adapter_state.db" }
 $env:PYTHONIOENCODING = "utf-8"

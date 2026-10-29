@@ -24,7 +24,6 @@ import argparse
 import contextlib
 import hashlib
 import hmac
-import ipaddress
 import json
 import logging
 import math
@@ -469,7 +468,7 @@ def handle_search(req: Any) -> dict:
 def _authorized(headers) -> bool:
     """Token / Bearer（``Authorization: <scheme> <key>``）或 ``X-Api-Key``，任一匹配即可。"""
     if not API_KEY:
-        return True
+        return False  # never serve without a key; main() refuses to start without one anyway
     candidates = []
     auth = (headers.get("Authorization") or "").strip()
     if auth:
@@ -481,36 +480,24 @@ def _authorized(headers) -> bool:
     return any(hmac.compare_digest(c.strip().encode("utf-8"), key) for c in candidates)
 
 
-# Keys that are fine on localhost but must never guard a reachable endpoint.
+# Placeholder / development keys that must never guard the service.
 _DEV_KEYS = {"local-dev-key", "local-e2e-test", "changeme", "test"}
-MIN_PUBLIC_KEY_LEN = 32
+MIN_KEY_LEN = 32
 
 
-def _is_loopback(host: str) -> bool:
-    if host.lower() == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False  # any other hostname may resolve to a reachable address
+def key_problem(key: str) -> str | None:
+    """Why ``key`` cannot be used as AML_ADAPTER_KEY, or None when it can.
 
-
-def public_bind_problem(host: str, key: str) -> str | None:
-    """Why the adapter must not listen on ``host`` with ``key``, or None when it may.
-
-    Loopback binds accept any key (or none). Anything else (0.0.0.0, a LAN or public address,
-    a hostname) needs a strong secret: at least MIN_PUBLIC_KEY_LEN characters and not a known
-    development key. AML_ALLOW_NO_AUTH does not apply there.
+    The same rule applies on every address and port (localhost, a LAN or public IP, behind any
+    proxy): the key must be at least MIN_KEY_LEN characters and not a known placeholder, so a
+    setup never depends on how the adapter is reached.
     """
-    if _is_loopback(host):
-        return None
     if not key:
-        return f"AML_ADAPTER_KEY must be set to listen on {host}"
-    if key in _DEV_KEYS or len(key) < MIN_PUBLIC_KEY_LEN:
+        return "AML_ADAPTER_KEY is not set"
+    if key in _DEV_KEYS or len(key) < MIN_KEY_LEN:
         return (
-            f"AML_ADAPTER_KEY is too weak to listen on {host}: use a random key of at least "
-            f"{MIN_PUBLIC_KEY_LEN} characters, e.g. "
-            "python -c \"import secrets; print(secrets.token_urlsafe(32))\""
+            f"AML_ADAPTER_KEY is too weak: use a random key of at least {MIN_KEY_LEN} "
+            "characters, e.g. python -c \"import secrets; print(secrets.token_hex(32))\""
         )
     return None
 
@@ -642,11 +629,9 @@ def main() -> int:
     args = parser.parse_args()
     if not args.config:
         parser.error("必须通过 --config 或 AML_CONFIG 指定配置（默认见 deploy/aml/config.yml）")
-    problem = public_bind_problem(args.host, API_KEY)
+    problem = key_problem(API_KEY)
     if problem:
         parser.error(problem)
-    if not API_KEY and os.environ.get("AML_ALLOW_NO_AUTH") != "1":
-        parser.error("AML_ADAPTER_KEY 未设置：拒绝无鉴权启动（本地调试可设 AML_ALLOW_NO_AUTH=1）")
     layer = load_layer(args.config)
     with contextlib.ExitStack() as stack:
         if NO_SOURCE:

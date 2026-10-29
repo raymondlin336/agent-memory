@@ -16,8 +16,7 @@ Usage (adapter already running; AML_DATE_PREFIX=0 matches the harness context fo
 judge model comes from ``LONGMEMEVAL_CHAT_UPSTREAM_URL`` / ``LONGMEMEVAL_CHAT_MODEL`` /
 ``LONGMEMEVAL_CHAT_API_KEYS`` (first of a comma-separated list), the same upstream as the harness QA
 proxy; without them it uses the adapter's own ``API_BASE`` / ``MODEL_NAME`` / ``API_KEY``. The
-adapter key comes from ``AML_ADAPTER_KEY`` (``local-dev-key`` when empty, as in
-scripts/start-aml-local.ps1).
+adapter key comes from ``AML_ADAPTER_KEY`` in the same env file (required).
 """
 
 from __future__ import annotations
@@ -107,7 +106,9 @@ def main() -> int:
     )
     if env_file:
         load_env(env_file)
-    adapter_key = os.environ.get("AML_ADAPTER_KEY") or "local-dev-key"
+    adapter_key = os.environ.get("AML_ADAPTER_KEY")
+    if not adapter_key:
+        raise SystemExit(f"AML_ADAPTER_KEY is not set (env file: {env_file or 'none found'})")
     items = {e["question_id"]: e for e in json.load(open(args.data, encoding="utf-8"))}
     item = items[args.question_id]
     user_id = f"e2e-{args.question_id}-{uuid.uuid4().hex[:8]}"

@@ -58,7 +58,7 @@ Agent Memory Leaderboard（AML）Cycle 2 开源赛道要求参赛方托管 HTTP 
 12. **并发**：Add 与 Search 分开信号量（默认 8 / 32），避免长 Add 占满槽位把 Search 挤成 429；
     槽位满回 429 + `Retry-After`。
 13. **鉴权**：`Authorization: <任意 scheme> <key>`（Token / Bearer）或 `X-Api-Key`，任一匹配；
-    `AML_ADAPTER_KEY` 未设置默认拒绝启动（`AML_ALLOW_NO_AUTH=1` 仅限本地调试）。健康检查任意路径 GET 免鉴权。
+    `AML_ADAPTER_KEY` is required on every address and port (32+ characters, no placeholder keys such as `local-dev-key`); there is no key-free mode. 健康检查任意路径 GET 免鉴权。
 14. **`user_id` → `Scope.user` 单射映射**（`scope_user`）：`user_id` 是唯一隔离边界，而引擎把它拼进
     Redis 键、ES / Milvus 过滤表达式。仅放行 `[A-Za-z0-9_.@-]{1,128}`（加 `u-` 前缀），其余（引号、斜杠、
     通配符、控制字符、超长、非 ASCII）取 SHA-256 前 160 位（加 `x-` 前缀）。内存引擎实测各类怪异 id 本就隔离，

@@ -299,21 +299,36 @@ _STRONG = "x" * 32
 
 
 @pytest.mark.parametrize(
-    ("host", "key", "ok"),
+    ("key", "ok"),
     [
-        ("127.0.0.1", "", True),
-        ("localhost", "local-dev-key", True),
-        ("::1", "k", True),
-        ("0.0.0.0", "", False),
-        ("0.0.0.0", "local-dev-key", False),
-        ("0.0.0.0", "x" * 31, False),
-        ("0.0.0.0", _STRONG, True),
-        ("10.0.0.5", _STRONG, True),
-        ("example.org", "short", False),
+        ("", False),
+        ("k", False),
+        ("local-dev-key", False),
+        ("x" * 31, False),
+        (_STRONG, True),
+        ("c" * 64, True),
     ],
 )
-def test_public_bind_requires_strong_key(aml, host, key, ok):
-    assert (aml.public_bind_problem(host, key) is None) is ok
+def test_key_rule_is_the_same_everywhere(aml, key, ok):
+    # One rule for every address and port: no local exception, no no-auth mode.
+    assert (aml.key_problem(key) is None) is ok
+
+
+def test_no_configured_key_rejects_every_request(aml, monkeypatch):
+    monkeypatch.setattr(aml, "API_KEY", "")
+    assert aml._authorized({"Authorization": "Bearer anything"}) is False
+    assert aml._authorized({}) is False
+
+
+def test_main_refuses_to_start_without_a_strong_key(aml, monkeypatch, tmp_path):
+    cfg = tmp_path / "c.yml"
+    cfg.write_text("memory_api: {}\n", encoding="utf-8")
+    for key in ("", "local-dev-key"):
+        monkeypatch.setattr(aml, "API_KEY", key)
+        argv = ["aml-adapter", "--config", str(cfg), "--host", "127.0.0.1"]
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit):
+            aml.main()
 
 
 def test_classify_maps_engine_errors(aml):

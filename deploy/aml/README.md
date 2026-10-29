@@ -32,8 +32,8 @@ Settings in `deploy/aml/.env`:
 - `API_KEY` (+ `API_BASE`, `MODEL_NAME`): gpt-4o-mini. OpenRouter works: `API_BASE=https://openrouter.ai/api/v1`,
   `MODEL_NAME=openai/gpt-4o-mini`.
 - `EMBED_API_KEY`: DashScope key for text-embedding-v4.
-- `AML_ADAPTER_KEY`: the key clients send. Empty means `local-dev-key`, accepted only on localhost (see
-  [Auth and errors](#auth-and-errors)).
+- `AML_ADAPTER_KEY` (required): the key every Add / Search must send, locally and on a server alike; at least 32
+  random characters (see [Auth and errors](#auth-and-errors)). The scripts and examples read it from this file.
 - `RERANK_BASE_URL` (default `http://127.0.0.1:8906/v1`): where the rerank server listens. The `rerank` extra
   installs its dependencies (torch CPU build + transformers). The MiniLM model (~90 MB) downloads from Hugging Face on
   first start and is cached; `HF_HUB_OFFLINE=1` uses only the cache. `RERANK_SERVER_PYTHON` / `RERANK_SERVER_SCRIPT`
@@ -72,7 +72,8 @@ Up to 20 messages per request (that is what AML sends). Returns 200 only after t
 Each user/assistant exchange costs roughly one gpt-4o-mini call, so expect ~5-15 s per exchange.
 
 ```powershell
-$h = @{ Authorization = "Bearer local-dev-key" }
+$key = ((Select-String -Path deploy\aml\.env -Pattern '^AML_ADAPTER_KEY=').Line -split '=', 2)[1]
+$h = @{ Authorization = "Bearer $key" }
 $add = @{
   request_id = "demo-0001"; user_id = "demo-user"; session_id = "demo-session-1"
   messages = @(
@@ -87,7 +88,8 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8200/add -Headers $h -ContentTyp
 Same with curl (Git Bash):
 
 ```bash
-curl -s -X POST http://127.0.0.1:8200/add -H "Authorization: Bearer local-dev-key" -H "Content-Type: application/json" \
+KEY=$(grep '^AML_ADAPTER_KEY=' deploy/aml/.env | cut -d= -f2)
+curl -s -X POST http://127.0.0.1:8200/add -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{"request_id":"demo-0001","user_id":"demo-user","session_id":"demo-session-1","messages":[{"role":"user","content":"I just adopted a beagle named Biscuit last Saturday.","timestamp":1730000000000},{"role":"assistant","content":"Congratulations on Biscuit! Beagles are great companions.","timestamp":1730000000000}]}'
 ```
 
@@ -102,7 +104,7 @@ Invoke-RestMethod -Method Post http://127.0.0.1:8200/search -Headers $h -Content
 ```
 
 ```bash
-curl -s -X POST http://127.0.0.1:8200/search -H "X-Api-Key: local-dev-key" -H "Content-Type: application/json" \
+curl -s -X POST http://127.0.0.1:8200/search -H "X-Api-Key: $KEY" -H "Content-Type: application/json" \
   -d '{"query":"What is the name of my dog?","user_id":"demo-user","top_k":5}'
 ```
 
@@ -121,12 +123,12 @@ curl -s -X POST http://127.0.0.1:8200/search -H "X-Api-Key: local-dev-key" -H "C
 Auth: `Authorization: Bearer <key>`, `Authorization: Token <key>` or `X-Api-Key: <key>`; all three are always
 accepted, and the key is compared in constant time.
 
-On localhost any key works, including `local-dev-key`. On any other address (`-BindHost 0.0.0.0`, a LAN or public
-IP, `--host` in `run-aml.sh`) the adapter refuses to start unless `AML_ADAPTER_KEY` is at least 32 characters and not a
-development key; `AML_ALLOW_NO_AUTH` has no effect there. Generate one and keep it only in the env file:
+The key is required everywhere, with the same rule on every address and port: the adapter refuses to start unless
+`AML_ADAPTER_KEY` is set, at least 32 characters, and not a placeholder such as `local-dev-key`. There is no
+key-free mode; only the `GET` health check needs no key. Generate one and keep it only in the env file:
 
 ```bash
-python -c "import secrets; print(secrets.token_urlsafe(32))"
+python -c "import secrets; print(secrets.token_hex(32))"
 ```
 
 The AML access request asks for the authentication scheme and this key (the "Memory System Key"); the platform
