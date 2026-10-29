@@ -17,7 +17,8 @@ use the Docker Compose setup in [server/README.md](server/README.md) instead of 
 ## Setup
 
 Requirements: Python 3.11+ with the `venv` module, `bash`, `curl`, `git`, outbound HTTPS to the model APIs and (on
-first start) to huggingface.co. Where huggingface.co is unreachable, set `HF_ENDPOINT` to a mirror. Ubuntu 24.04 and
+first start) to huggingface.co. This in-memory setup needs neither Docker nor `vm.max_map_count`; the one-time server
+preparation for the Docker setup with real storage is in [server/README.md](server/README.md), step 1. Where huggingface.co is unreachable, set `HF_ENDPOINT` to a mirror. Ubuntu 24.04 and
 Debian 12 ship a suitable Python; Ubuntu 22.04 ships 3.10, which is too old (install `python3.11` and use it below).
 Memory: about 600 MB at start (reranker ~400 MB, adapter ~150 MB); in in-memory mode the adapter grows
 with the stored memories. On Debian / Ubuntu:

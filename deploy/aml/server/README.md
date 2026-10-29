@@ -15,26 +15,49 @@ One script runs it all; no service needs to be installed or wired up by hand.
 All data lives in Docker volumes and survives restarts, reboots and image rebuilds. The models (gpt-4o-mini,
 text-embedding-v4) are called over the internet with your keys, as in the local setup.
 
-## 1. Prepare the server
+## 1. Prepare the server (one time, needs sudo)
 
 Needs: a Linux x86_64 server (e.g. Ubuntu 22.04 / 24.04 or Debian 12; Python does not need to be installed, it runs
-inside the containers), 4+ CPU cores, 8 GB RAM minimum (16 GB recommended for a full leaderboard run), 40 GB free
-disk, outbound internet.
+inside the containers), 4+ CPU cores, 40 GB free disk, outbound internet, and enough RAM for the stored data:
 
-Install Docker Engine with the compose plugin, and let your user run it:
+- Redis and Milvus keep their data in memory, so RAM use grows with the number of stored memories, not with traffic.
+  A full leaderboard run stores roughly 0.5-1 million memories or more, which is about 6-13 GB for the whole stack
+  by the end of the run (rough estimate). Plan for **16 GB** available to this stack; 8 GB works for testing but can
+  run out late in a full run.
+
+These steps are done once, on the server itself, by a user with `sudo`.
+
+**a. Install Docker** (Engine plus the compose plugin):
 
 ```bash
 curl -fsSL https://get.docker.com | sudo sh
-sudo usermod -aG docker "$USER"      # then log out and back in
-docker compose version               # should print a version
 ```
 
-Elasticsearch needs a kernel setting (kept across reboots):
+**b. Let your user run Docker without sudo**, then log out and back in so the group change applies:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+**c. Raise `vm.max_map_count` for Elasticsearch.** Elasticsearch memory-maps its index files and needs more maps than
+the Linux default (65530); too few makes it fail or restart under load. This makes the setting permanent across
+reboots:
 
 ```bash
 echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-elasticsearch.conf
 sudo sysctl --system
 ```
+
+**Verify** (as your normal user, after logging back in):
+
+```bash
+docker compose version             # prints a version: Docker and the compose plugin are installed
+docker ps                          # works without sudo: your user is in the docker group
+cat /proc/sys/vm/max_map_count     # prints 262144
+```
+
+`./aml-server.sh up` checks these again: it stops if Docker cannot be used and warns if `vm.max_map_count` is too
+low. Docker Desktop (Windows / macOS) needs none of these steps; it runs its own Linux VM.
 
 ## 2. Get the code
 
@@ -60,7 +83,9 @@ Set these lines (leave the rest as they are; the stack sets store addresses itse
 | `AML_ADAPTER_KEY` | the team's adapter key: the same value as in every developer's `deploy/aml/.env` and in the AML access request. Only if no key exists yet, create one with `openssl rand -hex 32` |
 | `AML_DOMAIN` | leave unset for now (step 6) |
 
-The adapter refuses to start with an empty, short or development key. One key is used everywhere, so the same requests (and `./aml-server.sh check`) work locally and on the server; see "Auth and errors" in `deploy/aml/README.md`.
+The adapter refuses to start with an empty, short or development key. One key is used everywhere, so the same
+requests (and `./aml-server.sh check`) work locally and on the server; see "Auth and errors" in
+`deploy/aml/README.md`.
 
 ## 4. Start
 
@@ -155,17 +180,22 @@ What goes into the AML access request:
 | Stop, keep data | `./aml-server.sh down` |
 | Delete all stored data | `./aml-server.sh wipe` (asks for confirmation) |
 
-Containers restart on their own after a crash or a reboot (`restart: unless-stopped`; the Docker service starts at
-boot). Container logs are capped at 5 files of 50 MB per container, so a long run cannot fill the disk with logs. Data is in the Docker volumes `aml_redis-data`, `aml_es-data`, `aml_milvus-data` and `aml_adapter-data` (the
-request ledger). Deleting the ledger volume alone would make AML's retried Adds store everything twice, so remove
-data only with `wipe`.
+Containers restart on their own after a crash or a reboot (`restart: unless-stopped`; a small init runs as each
+container's first process, so a crashed service exits its container and Docker starts it again; the Docker service
+starts at boot). Interrupted Adds resume from the request ledger when AML retries them. Container logs are capped at
+5 files of 50 MB per container, so a long run cannot fill the disk with logs.
+
+Data is in the Docker volumes `aml_redis-data`, `aml_es-data`, `aml_milvus-data` and `aml_adapter-data` (the request
+ledger). Deleting the ledger volume alone would make AML's retried Adds store everything twice, so remove data only
+with `wipe`.
 
 Evaluation data may be used only for the run and must be deleted within 30 days after it: `./aml-server.sh wipe`
 removes every memory, index and the ledger; container logs go with the containers.
 
-Tuning settings (`AML_MAX_ADD_CONCURRENCY`, `AML_MAX_SEARCH_CONCURRENCY`, `AML_ADD_DEADLINE_S`, `AML_DATE_PREFIX`, ...)
-are the same as in the local setup and go in `deploy/aml/.env`; see `deploy/aml/README-linux.md`. For long runs,
-`ES_HEAP=2g` gives Elasticsearch more room.
+Tuning settings (`AML_MAX_ADD_CONCURRENCY`, `AML_MAX_SEARCH_CONCURRENCY`, `AML_ADD_DEADLINE_S`, `AML_DATE_PREFIX`,
+...) are the same as in the local setup and go in `deploy/aml/.env`; see `deploy/aml/README-linux.md`. The default of
+8 Adds at once is low for a full leaderboard run; raise `AML_MAX_ADD_CONCURRENCY` after a capacity test against the
+model APIs' rate limits. For long runs, `ES_HEAP=2g` gives Elasticsearch more room.
 
 ## Troubleshooting
 
@@ -175,6 +205,7 @@ are the same as in the local setup and go in `deploy/aml/.env`; see `deploy/aml/
 | `permission denied ... docker.sock` | your user is not in the `docker` group yet: log out and back in after `usermod` |
 | `elasticsearch` keeps restarting, log mentions `max_map_count` | redo the `vm.max_map_count` step |
 | `elasticsearch` exits on a small machine / OOM in logs | set `ES_HEAP=512m` in `deploy/aml/.env`, run `up` |
+| containers restart repeatedly late in a long run; `dmesg` mentions `Out of memory` | the server is out of RAM (stored data grows with the run): add memory (see step 1) |
 | Elasticsearch stops accepting writes, log mentions `flood stage` / disk watermark | the disk is over ~95% full: free space, then `./aml-server.sh up` |
 | `milvus` unhealthy for the first minutes | normal; it can need 1-3 minutes on a slow disk. `logs milvus` shows progress |
 | image build fails downloading packages or the model | the network blocks PyPI or Hugging Face: set `PIP_INDEX_URL` / `HF_ENDPOINT` to mirrors in `deploy/aml/.env` |
@@ -194,9 +225,12 @@ Run end to end under Docker (Docker Desktop on WSL2, engine 29.9.2, Compose 5.6.
 five containers, `check` passed (health, 401, 404, Add, Search, user isolation) on the real Redis / Elasticsearch /
 Milvus stores, and `durability` passed (a memory written before restarting every container was found afterwards, and
 the retried Add was answered from the ledger). Recreating the containers (as `up` does after a settings or code
-change) kept the data and the log limits applied. Failure tests with LongMemEval questions running: hard-killing the adapter, Milvus, Redis and
-Elasticsearch one at a time (each restarted on its own), and restarting every container at once twice in the middle of
-writes, lost no stored memories, created no duplicates, and let interrupted Adds resume from the ledger; every question
-finished with scores matching the run without failures. On Docker Desktop for Windows the published host port can take
-minutes to reconnect after a container restart (inside the compose network the adapter is back within seconds). Not yet exercised: a Linux host, the `caddy` HTTPS profile, a
-proxy in front, and a full leaderboard-sized load.
+change) kept the data and the log limits applied.
+
+Failure tests with LongMemEval questions running: hard-killing the adapter, Milvus, Redis and Elasticsearch one at a
+time (each restarted on its own), and restarting every container at once twice in the middle of writes, lost no stored
+memories, created no duplicates, and let interrupted Adds resume from the ledger; every question finished with scores
+matching the run without failures. On Docker Desktop for Windows the published host port can take minutes to reconnect
+after a container restart (inside the compose network the adapter is back within seconds).
+
+Not yet exercised: a Linux host, the `caddy` HTTPS profile, a proxy in front, and a full leaderboard-sized load.
