@@ -50,10 +50,11 @@ Settings in `deploy/aml/.env`:
   first start and is cached; `HF_HUB_OFFLINE=1` uses only the cache. `RERANK_SERVER_PYTHON` / `RERANK_SERVER_SCRIPT`
   optionally run a different python or server script.
 
-Without `deploy/aml/.env` the script falls back to `evaluation/environment/.env`. The file is sourced, so its values
-take precedence over variables already exported in the shell. `API_KEY` and `EMBED_API_KEY` must be set; to keep them
-out of the env file, leave them empty and set `API_KEY_FILE` / `EMBED_API_KEY_FILE` to files that contain only the key
-(e.g. `chmod 600` files outside the repo).
+Without `deploy/aml/.env` the script falls back to `evaluation/environment/.env`; with neither, everything can come
+from the command line and the environment. Precedence: command-line options > variables already exported in the shell
+> the env file > defaults (the values in `.env.example`). `API_KEY`, `EMBED_API_KEY` and `AML_ADAPTER_KEY` must end up
+set; to keep the model keys out of the env file, use `--api-key-file` / `--embed-key-file` (or `API_KEY_FILE` /
+`EMBED_API_KEY_FILE`) pointing at files that contain only the key (e.g. `chmod 600` files outside the repo).
 
 ## Start / stop (one command)
 
@@ -71,8 +72,19 @@ Both run in the background and keep running after the shell exits. The rerank se
 scripts/start-aml-local.sh --stop     # SIGTERM, then SIGKILL after 10 s if a process does not exit
 ```
 
-Options: `--port 8200`, `--host 0.0.0.0` (listen beyond localhost), `--env-file <path>`. A different python is chosen
-with `PYTHON=/path/to/python scripts/start-aml-local.sh`.
+Options (`scripts/start-aml-local.sh --help` lists them; more examples in `scripts/start-aml-local.example.txt`):
+
+| Option | Effect |
+|---|---|
+| `--port N` / `--host H` | adapter port (default 8200) / bind address (default 127.0.0.1) |
+| `--rerank-port N` | reranker port (default 8906; sets `RERANK_BASE_URL`) |
+| `--api-base URL` / `--model NAME` | LLM endpoint / model (`MODEL_NAME` defaults to `openai/gpt-4o-mini` on OpenRouter, else `gpt-4o-mini`) |
+| `--api-key-file PATH` / `--embed-key-file PATH` | read the LLM / embedding key from a file |
+| `--api-key KEY` / `--embed-key KEY` | pass the key itself (ends up in shell history; prefer the file options) |
+| `--env-file PATH` | load this env file instead of `deploy/aml/.env` |
+
+The adapter key has no command-line option: it comes from the environment or the env file. A different python is
+chosen with `PYTHON=/path/to/python scripts/start-aml-local.sh`.
 
 ## Check the services
 

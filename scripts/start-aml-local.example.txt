@@ -1,0 +1,32 @@
+Example commands for scripts/start-aml-local.sh (run from the repo root).
+Options and precedence: scripts/start-aml-local.sh --help
+
+Start / stop
+  scripts/start-aml-local.sh            # start with deploy/aml/.env, wait until healthy
+  scripts/start-aml-local.sh --stop     # stop what it started
+
+  # own ports, keys from files
+  scripts/start-aml-local.sh --port 8300 --rerank-port 8907 \
+    --api-base https://openrouter.ai/api/v1 --api-key-file ~/llm.txt --embed-key-file ~/embed.txt
+
+  # own ports, keys inline (saved in shell history; start the line with a space to skip it)
+  scripts/start-aml-local.sh --port 8300 --rerank-port 8907 \
+    --api-base https://openrouter.ai/api/v1 --api-key sk-or-v1-... --embed-key sk-...
+
+AML_ADAPTER_KEY is required (32+ random characters) and is read from the environment or deploy/aml/.env;
+the script does not start without it. Every Add / Search must send it; only GET health checks need no key.
+
+Test (default ports; use your --port / --rerank-port if you changed them)
+  curl -s localhost:8200/health                 # adapter: {"status": "ok"}
+  curl -s localhost:8906/v1                     # reranker: {"status": "ok", "model": ...}
+
+  KEY=$(grep '^AML_ADAPTER_KEY=' deploy/aml/.env | cut -d= -f2)    # or: KEY=$AML_ADAPTER_KEY
+  curl -s -X POST localhost:8200/add -H "X-Api-Key: $KEY" -H 'Content-Type: application/json' \
+    -d '{"request_id":"t-1","user_id":"tester","session_id":"s1","messages":[{"role":"user","content":"My cat is named Mochi.","timestamp":1730000000000}]}'
+  curl -s -X POST localhost:8200/search -H "X-Api-Key: $KEY" -H 'Content-Type: application/json' \
+    -d '{"query":"What is my cat called?","user_id":"tester","top_k":5}'
+
+  # full Add -> Search -> answer -> judge on one LongMemEval question (reads API_KEY and
+  # AML_ADAPTER_KEY from deploy/aml/.env)
+  .venv/bin/python scripts/aml_e2e_one.py --data evaluation/datasets/longmemeval/longmemeval_mini.json \
+    --question-id 89527b6b --url http://127.0.0.1:8200
