@@ -50,8 +50,10 @@ Settings in `deploy/aml/.env`:
   first start and is cached; `HF_HUB_OFFLINE=1` uses only the cache. `RERANK_SERVER_PYTHON` / `RERANK_SERVER_SCRIPT`
   optionally run a different python or server script.
 
-Without `deploy/aml/.env` the script falls back to `evaluation/environment/.env`. Variables already exported in the
-shell take precedence over the file.
+Without `deploy/aml/.env` the script falls back to `evaluation/environment/.env`. The file is sourced, so its values
+take precedence over variables already exported in the shell. `API_KEY` and `EMBED_API_KEY` must be set; to keep them
+out of the env file, leave them empty and set `API_KEY_FILE` / `EMBED_API_KEY_FILE` to files that contain only the key
+(e.g. `chmod 600` files outside the repo).
 
 ## Start / stop (one command)
 
@@ -63,20 +65,21 @@ Starts the rerank server (unless it already answers) and the adapter, waits unti
 `ready: ...`. Takes about 15-30 s, mostly loading the reranker model (longer on the first start while it downloads).
 Both run in the background and keep running after the shell exits. The rerank server can also run on its own:
 `.venv/bin/python scripts/rerank_server.py --port 8906`. Logs, pids and the adapter's request ledger go to
-`evaluation/outputs/aml_local/` (`adapter.log.err` has the adapter's log lines).
+`evaluation/outputs/aml_local/` (`adapter.log` and `reranker.log` hold each process's output).
 
 ```bash
-scripts/start-aml-local.sh --stop
+scripts/start-aml-local.sh --stop     # SIGTERM, then SIGKILL after 10 s if a process does not exit
 ```
 
-Options: `--port 8200`, `--host 0.0.0.0` (listen beyond localhost), `--env-file <path>`, `--python <path>`.
+Options: `--port 8200`, `--host 0.0.0.0` (listen beyond localhost), `--env-file <path>`. A different python is chosen
+with `PYTHON=/path/to/python scripts/start-aml-local.sh`.
 
 ## Check the services
 
 ```bash
 curl -s http://127.0.0.1:8200/health      # {"status": "ok"}; any GET path, no key needed
 curl -s http://127.0.0.1:8906/v1          # {"status": "ok", "model": "cross-encoder/ms-marco-MiniLM-L-6-v2"}
-tail -f evaluation/outputs/aml_local/adapter.log.err   # follow the adapter log
+tail -f evaluation/outputs/aml_local/adapter.log   # follow the adapter log
 ```
 
 ## Add

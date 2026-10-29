@@ -1,137 +1,122 @@
 #!/usr/bin/env bash
 # Copyright (c) Huawei Technologies Co., Ltd. 2026. All rights reserved.
-# Local (no Docker) AML stack for Linux: MiniLM rerank server + AML Add/Search adapter in
-# in-memory mode. Same behaviour and settings as scripts/start-aml-local.ps1 on Windows.
+# Local AML stack on Linux: MiniLM rerank server + AML Add/Search adapter (in-memory by default).
+# Linux counterpart of scripts/start-aml-local.ps1.
 #
 #   scripts/start-aml-local.sh            # start, wait until healthy
 #   scripts/start-aml-local.sh --stop     # stop what it started
 #
-# Options: --port 8200, --host 127.0.0.1 (0.0.0.0 to listen beyond localhost), --env-file <path>,
-# --python <path>. Settings come from deploy/aml/.env (falls back to evaluation/environment/.env);
-# variables already set in the shell win over the file. The reranker is scripts/rerank_server.py on
-# the port of RERANK_BASE_URL, run with the adapter's python (needs pip install -e ".[rerank]");
-# RERANK_SERVER_PYTHON / RERANK_SERVER_SCRIPT override that. If the reranker already answers, it
-# is left alone. Logs, pids and the adapter ledger go to evaluation/outputs/aml_local/ (git-ignored).
+# Settings come from deploy/aml/.env (falls back to evaluation/environment/.env). API_KEY /
+# EMBED_API_KEY may instead be read from files named by API_KEY_FILE / EMBED_API_KEY_FILE, so keys
+# stay out of the repo and off the command line. Logs, pids and the ledger go to
+# evaluation/outputs/aml_local/ (git-ignored).
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-RUN_DIR="$ROOT/evaluation/outputs/aml_local"
-PID_FILE="$RUN_DIR/pids"
-mkdir -p "$RUN_DIR"
+RUN_DIR="${ROOT}/evaluation/outputs/aml_local"
+PORT=8200
+BIND_HOST=127.0.0.1
+ENV_FILE=""
+STOP=0
 
-STOP=0 ENV_FILE="" PORT=8200 BIND_HOST="127.0.0.1" PYTHON=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --stop) STOP=1; shift ;;
-    --env-file) ENV_FILE="$2"; shift 2 ;;
-    --port) PORT="$2"; shift 2 ;;
-    --host) BIND_HOST="$2"; shift 2 ;;
-    --python) PYTHON="$2"; shift 2 ;;
-    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
+    --stop) STOP=1 ;;
+    --port) PORT="$2"; shift ;;
+    --host) BIND_HOST="$2"; shift ;;
+    --env-file) ENV_FILE="$2"; shift ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
+  shift
 done
+mkdir -p "${RUN_DIR}"
 
-kill_tree() {
-  local pid="$1"
-  if [[ -r "/proc/$pid/winpid" ]]; then  # Git Bash on Windows: native process tree
-    taskkill //PID "$(cat "/proc/$pid/winpid")" //T //F >/dev/null 2>&1 || true
-  else
-    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
-  fi
+stop_started() {
+  local found=0
+  for name in adapter reranker; do
+    local pidfile="${RUN_DIR}/${name}.pid"
+    [[ -f "${pidfile}" ]] || continue
+    found=1
+    local pid
+    pid="$(cat "${pidfile}")"
+    if kill -0 "${pid}" 2>/dev/null; then
+      kill -TERM -- "-${pid}" 2>/dev/null || kill -TERM "${pid}"   # whole process group
+      for _ in $(seq 1 20); do kill -0 "${pid}" 2>/dev/null || break; sleep 0.5; done
+      if kill -0 "${pid}" 2>/dev/null; then kill -KILL -- "-${pid}" 2>/dev/null || true; fi
+      echo "stopped ${name} (pid ${pid})"
+    fi
+    rm -f "${pidfile}"
+  done
+  [[ ${found} -eq 1 ]] || echo "nothing recorded in ${RUN_DIR}"
 }
 
-if [[ $STOP -eq 1 ]]; then
-  [[ -f "$PID_FILE" ]] || { echo "nothing recorded in $PID_FILE"; exit 0; }
-  while read -r name pid; do
-    kill_tree "$pid"
-    echo "stopped $name (pid $pid)"
-  done < "$PID_FILE"
-  rm -f "$PID_FILE"
-  exit 0
-fi
+is_up() { curl -sf --max-time 3 "$1" >/dev/null 2>&1; }
 
-if [[ -z "$ENV_FILE" ]]; then
-  ENV_FILE="$ROOT/deploy/aml/.env"
-  [[ -f "$ENV_FILE" ]] || ENV_FILE="$ROOT/evaluation/environment/.env"
-fi
-[[ -f "$ENV_FILE" ]] || { echo "env file not found: $ENV_FILE (copy deploy/aml/.env.example to deploy/aml/.env)" >&2; exit 1; }
-while IFS= read -r line || [[ -n "$line" ]]; do
-  line="${line%$'\r'}"
-  [[ "$line" =~ ^[[:space:]]*# || "$line" != *=* ]] && continue
-  key="$(echo "${line%%=*}" | tr -d '[:space:]')"
-  value="${line#*=}"; value="${value#"${value%%[![:space:]]*}"}"; value="${value%"${value##*[![:space:]]}"}"
-  value="${value%\"}"; value="${value#\"}"; value="${value%\'}"; value="${value#\'}"
-  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-  [[ -n "${!key:-}" ]] || export "$key=$value"
-done < "$ENV_FILE"
-
-case "$BIND_HOST" in 127.0.0.1|localhost|::1) LOOPBACK=1 ;; *) LOOPBACK=0 ;; esac
-if [[ -z "${AML_ADAPTER_KEY:-}" ]]; then
-  # The dev key is only acceptable on loopback; the adapter refuses weak keys on other binds.
-  [[ $LOOPBACK -eq 1 ]] || { echo "AML_ADAPTER_KEY must be set (32+ random characters) to listen on $BIND_HOST" >&2; exit 1; }
-  export AML_ADAPTER_KEY="local-dev-key"; echo "AML_ADAPTER_KEY not set; using local-dev-key"
-fi
-export AML_IN_MEMORY="${AML_IN_MEMORY:-1}"
-export AML_STATE_DB="${AML_STATE_DB:-$RUN_DIR/aml_adapter_state.db}"
-export PYTHONIOENCODING=utf-8 PYTHONPATH="$ROOT"
-if [[ -z "$PYTHON" ]]; then
-  PYTHON="$ROOT/.venv/bin/python"
-  [[ -x "$PYTHON" ]] || PYTHON="$ROOT/.venv/Scripts/python.exe"
-fi
-[[ -x "$PYTHON" ]] || { echo "python not found: $PYTHON (create .venv and pip install -e \".[dev,rerank]\")" >&2; exit 1; }
-
-up() { curl -fsS -m 3 -o /dev/null "$1" 2>/dev/null; }
-
-wait_up() {  # name url seconds pid log
-  local deadline=$((SECONDS + $3))
-  while (( SECONDS < deadline )); do
-    if up "$2"; then echo "$1 up: $2"; return 0; fi
-    kill -0 "$4" 2>/dev/null || break
+wait_up() {  # name url pid log
+  local name="$1" url="$2" pid="$3" log="$4"
+  for _ in $(seq 1 90); do
+    if is_up "${url}"; then echo "${name} up: ${url}"; return 0; fi
+    kill -0 "${pid}" 2>/dev/null || break
     sleep 2
   done
-  echo "$1 did not come up; last log lines from $5:"
-  tail -n 20 "$5" 2>/dev/null || true
+  echo "${name} did not come up; last log lines from ${log}:" >&2
+  tail -n 20 "${log}" >&2 || true
   exit 1
 }
 
-start_bg() {  # log cmd... ; prints the pid. setsid gives it its own process group for --stop.
-  local log="$1"; shift
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" >"$log" 2>"$log.err" </dev/null &
-  else
-    nohup "$@" >"$log" 2>"$log.err" </dev/null &
-  fi
-  echo $!
+start_bg() {  # name log cmd...   (own session so --stop can kill the whole group)
+  local name="$1" log="$2"; shift 2
+  setsid nohup "$@" >"${log}" 2>&1 < /dev/null &
+  echo $! >"${RUN_DIR}/${name}.pid"
 }
 
-# Keep the record of a reranker started by an earlier run so --stop still stops it.
-OLD_RERANK="$(grep '^reranker ' "$PID_FILE" 2>/dev/null || true)"
-: > "$PID_FILE"
+if [[ ${STOP} -eq 1 ]]; then stop_started; exit 0; fi
+
+if [[ -z "${ENV_FILE}" ]]; then
+  ENV_FILE="${ROOT}/deploy/aml/.env"
+  [[ -f "${ENV_FILE}" ]] || ENV_FILE="${ROOT}/evaluation/environment/.env"
+fi
+[[ -f "${ENV_FILE}" ]] || { echo "env file not found: ${ENV_FILE} (cp deploy/aml/.env.example deploy/aml/.env)" >&2; exit 1; }
+set -a
+# shellcheck disable=SC1090
+source "${ENV_FILE}"
+set +a
+
+read_key_file() {  # VAR FILE_VAR
+  local var="$1" file_var="$2"
+  if [[ -z "${!var:-}" && -n "${!file_var:-}" ]]; then
+    [[ -r "${!file_var}" ]] || { echo "${file_var}: cannot read ${!file_var}" >&2; exit 1; }
+    export "${var}=$(tr -d '[:space:]' < "${!file_var}")"
+  fi
+}
+read_key_file API_KEY API_KEY_FILE
+read_key_file EMBED_API_KEY EMBED_API_KEY_FILE
+[[ -n "${API_KEY:-}" ]] || { echo "API_KEY (or API_KEY_FILE) is not set" >&2; exit 1; }
+[[ -n "${EMBED_API_KEY:-}" ]] || { echo "EMBED_API_KEY (or EMBED_API_KEY_FILE) is not set" >&2; exit 1; }
+
+if [[ -z "${AML_ADAPTER_KEY:-}" ]]; then export AML_ADAPTER_KEY=local-dev-key; echo "AML_ADAPTER_KEY not set; using local-dev-key"; fi
+export AML_IN_MEMORY="${AML_IN_MEMORY:-1}"
+export AML_STATE_DB="${AML_STATE_DB:-${RUN_DIR}/aml_adapter_state.db}"
 export RERANK_BASE_URL="${RERANK_BASE_URL:-http://127.0.0.1:8906/v1}"
 export RERANK_API_KEY="${RERANK_API_KEY:-local}"
-RERANK_URL="${RERANK_BASE_URL%/}"
-if up "$RERANK_URL"; then
-  echo "reranker already up: $RERANK_URL"
-  [[ -n "$OLD_RERANK" ]] && echo "$OLD_RERANK" >> "$PID_FILE"
+export PYTHONPATH="${ROOT}" PYTHONIOENCODING=utf-8
+PYTHON="${PYTHON:-${ROOT}/.venv/bin/python}"
+[[ -x "${PYTHON}" ]] || { echo "python not found: ${PYTHON} (python3 -m venv .venv && .venv/bin/pip install -e \".[dev,rerank]\")" >&2; exit 1; }
+
+rerank_url="${RERANK_BASE_URL%/}"
+if is_up "${rerank_url}"; then
+  echo "reranker already up: ${rerank_url}"
 else
-  RERANK_PORT="$(echo "$RERANK_URL" | sed -E 's#^[a-z]+://[^/:]+:([0-9]+).*#\1#')"
-  [[ "$RERANK_PORT" =~ ^[0-9]+$ ]] || RERANK_PORT=8906
-  LOG="$RUN_DIR/reranker.log"
-  PID="$(start_bg "$LOG" "${RERANK_SERVER_PYTHON:-$PYTHON}" "${RERANK_SERVER_SCRIPT:-$ROOT/scripts/rerank_server.py}" --port "$RERANK_PORT")"
-  echo "reranker $PID" >> "$PID_FILE"
-  # First start downloads the model (~90 MB), hence the long wait.
-  wait_up reranker "$RERANK_URL" 600 "$PID" "$LOG.err"
+  rerank_port="$(sed -E 's#^[a-z]+://[^:/]+:?([0-9]*).*#\1#' <<<"${rerank_url}")"
+  log="${RUN_DIR}/reranker.log"
+  start_bg reranker "${log}" "${RERANK_SERVER_PYTHON:-${PYTHON}}" \
+    "${RERANK_SERVER_SCRIPT:-${ROOT}/scripts/rerank_server.py}" --port "${rerank_port:-8906}"
+  wait_up reranker "${rerank_url}" "$(cat "${RUN_DIR}/reranker.pid")" "${log}"
 fi
 
-CHECK_HOST="$BIND_HOST"; [[ "$CHECK_HOST" == "0.0.0.0" || "$CHECK_HOST" == "::" ]] && CHECK_HOST=127.0.0.1
-ADAPTER_URL="http://$CHECK_HOST:$PORT"
-if up "$ADAPTER_URL/health"; then
-  echo "something already answers on $ADAPTER_URL; stop it first (--stop)" >&2; exit 1
-fi
-LOG="$RUN_DIR/adapter.log"
-cd "$ROOT"
-PID="$(start_bg "$LOG" "$PYTHON" "$ROOT/scripts/aml_adapter.py" --config "$ROOT/deploy/aml/config.yml" --host "$BIND_HOST" --port "$PORT")"
-echo "adapter $PID" >> "$PID_FILE"
-wait_up adapter "$ADAPTER_URL/health" 180 "$PID" "$LOG.err"
-echo "ready: POST http://$BIND_HOST:$PORT/add and http://$BIND_HOST:$PORT/search (in-memory=$AML_IN_MEMORY); logs in $RUN_DIR"
+adapter_url="http://${BIND_HOST}:${PORT}"
+if is_up "${adapter_url}/health"; then echo "something already answers on ${adapter_url}; stop it first (--stop)" >&2; exit 1; fi
+log="${RUN_DIR}/adapter.log"
+start_bg adapter "${log}" "${PYTHON}" "${ROOT}/scripts/aml_adapter.py" \
+  --config "${ROOT}/deploy/aml/config.yml" --host "${BIND_HOST}" --port "${PORT}"
+wait_up adapter "${adapter_url}/health" "$(cat "${RUN_DIR}/adapter.pid")" "${log}"
+echo "ready: POST ${adapter_url}/add and ${adapter_url}/search (in-memory=${AML_IN_MEMORY}); logs in ${RUN_DIR}"
