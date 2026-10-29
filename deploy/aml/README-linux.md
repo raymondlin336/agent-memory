@@ -17,8 +17,9 @@ use the Docker Compose setup in [server/README.md](server/README.md) instead of 
 ## Setup
 
 Requirements: Python 3.11+ with the `venv` module, `bash`, `curl`, `git`, outbound HTTPS to the model APIs and (on
-first start) to huggingface.co. This in-memory setup needs neither Docker nor `vm.max_map_count`; the one-time server
-preparation for the Docker setup with real storage is in [server/README.md](server/README.md), step 1. Where huggingface.co is unreachable, set `HF_ENDPOINT` to a mirror. Ubuntu 24.04 and
+first start) to huggingface.co. Where huggingface.co is unreachable, set `HF_ENDPOINT` to a mirror. This in-memory
+setup needs neither Docker nor `vm.max_map_count`; the Docker setup with real storage needs the one-time preparation
+in [Preparing a server for the Docker setup](#preparing-a-server-for-the-docker-setup). Ubuntu 24.04 and
 Debian 12 ship a suitable Python; Ubuntu 22.04 ships 3.10, which is too old (install `python3.11` and use it below).
 Memory: about 600 MB at start (reranker ~400 MB, adapter ~150 MB); in in-memory mode the adapter grows
 with the stored memories. On Debian / Ubuntu:
@@ -163,6 +164,44 @@ Errors are JSON `{"error": "..."}`:
 | 422 | missing or wrong field, e.g. `{"error": "user_id must be a non-empty string"}` | no |
 | 429 | too many Adds (8) or Searches (32) at once; has `Retry-After` | yes |
 | 500 / 503 | engine or model service failure; 503 also after 25 min in one Add (the retry resumes) | yes |
+
+## Preparing a server for the Docker setup
+
+The durable setup (Redis / Elasticsearch / Milvus in Docker, [server/README.md](server/README.md)) needs this once
+per server, by a user with `sudo`. The in-memory setup in this guide does not.
+
+**a. Install Docker** (Engine plus the compose plugin):
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+```
+
+**b. Let your user run Docker without sudo**, then log out and back in so the group change applies:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+**c. Raise `vm.max_map_count` for Elasticsearch.** Elasticsearch memory-maps its index files and needs more maps than
+the Linux default (65530); too few makes it fail or restart under load. This makes the setting permanent across
+reboots:
+
+```bash
+echo 'vm.max_map_count=262144' | sudo tee /etc/sysctl.d/99-elasticsearch.conf
+sudo sysctl --system
+```
+
+**Verify** (as your normal user, after logging back in):
+
+```bash
+docker compose version             # prints a version: Docker and the compose plugin are installed
+docker ps                          # works without sudo: your user is in the docker group
+cat /proc/sys/vm/max_map_count     # prints 262144
+```
+
+Then continue with [server/README.md](server/README.md) from step 2; its `./aml-server.sh up` checks these again.
+Memory for that setup grows with the stored data (Redis and Milvus keep it in RAM): plan for 16 GB for a full
+leaderboard run.
 
 ## Running on a server
 
