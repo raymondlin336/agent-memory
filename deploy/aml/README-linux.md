@@ -133,11 +133,19 @@ accepted, and the key is compared in constant time.
 
 The key is required everywhere, with the same rule on every address and port: the adapter refuses to start unless
 `AML_ADAPTER_KEY` is set, at least 32 characters, and not a placeholder such as `local-dev-key`. There is no
-key-free mode; only the `GET` health check needs no key. Generate one and keep it only in the env file:
+key-free mode; only the `GET` health check needs no key.
+
+**One key for everything.** The same `AML_ADAPTER_KEY` value goes in every `deploy/aml/.env` (each developer's
+machine and the server) and in the AML access request, so a request that works locally works unchanged against the
+server. Get the existing key from whoever holds it (e.g. the team's password manager) rather than generating a new
+one; generate a key only when none exists yet:
 
 ```bash
-.venv/bin/python -c "import secrets; print(secrets.token_urlsafe(32))"
+.venv/bin/python -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+Every machine whose `.env` holds the key can write to and read from the live endpoint, so treat those files as
+secrets: `deploy/aml/.env` is git-ignored; keep the key out of chat, screenshots, shell history and URLs.
 
 The AML access request asks for the authentication scheme and this key (the "Memory System Key"); the platform
 stores it encrypted. Declare one scheme, e.g. `Authorization: Bearer <key>`, and keep the key out of URLs, logs and
@@ -229,7 +237,7 @@ location / {
 }
 ```
 
-If the adapter itself listens on a public address instead, `AML_ADAPTER_KEY` must be a strong key (see above).
+Listening on a public address directly (`--host 0.0.0.0`) also works, since the key rule is the same on every address; a proxy is still needed for HTTPS.
 
 ## Test one full LongMemEval question end to end
 

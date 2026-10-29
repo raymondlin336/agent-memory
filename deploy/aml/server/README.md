@@ -48,7 +48,6 @@ cd agent-memory
 ```bash
 cp deploy/aml/.env.example deploy/aml/.env
 chmod 600 deploy/aml/.env
-openssl rand -hex 32                 # prints a random adapter key; copy it
 nano deploy/aml/.env
 ```
 
@@ -58,10 +57,10 @@ Set these lines (leave the rest as they are; the stack sets store addresses itse
 |---|---|
 | `API_KEY` | gpt-4o-mini key. With OpenRouter also set `API_BASE=https://openrouter.ai/api/v1` and `MODEL_NAME=openai/gpt-4o-mini` |
 | `EMBED_API_KEY` | DashScope key for text-embedding-v4 |
-| `AML_ADAPTER_KEY` | the key printed by `openssl rand -hex 32`; the same key goes into the AML access request |
+| `AML_ADAPTER_KEY` | the team's adapter key: the same value as in every developer's `deploy/aml/.env` and in the AML access request. Only if no key exists yet, create one with `openssl rand -hex 32` |
 | `AML_DOMAIN` | leave unset for now (step 6) |
 
-The adapter refuses to start with an empty, short or development key.
+The adapter refuses to start with an empty, short or development key. One key is used everywhere, so the same requests (and `./aml-server.sh check`) work locally and on the server; see "Auth and errors" in `deploy/aml/README.md`.
 
 ## 4. Start
 
