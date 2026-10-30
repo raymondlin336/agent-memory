@@ -81,7 +81,7 @@ NO_SOURCE = os.environ.get("AML_NO_SOURCE", "1") == "1"
 ADD_DEADLINE_S = float(os.environ.get("AML_ADD_DEADLINE_S", "1500"))
 DIALOGUE_TURN_MAX_CHARS = int(os.environ.get("AML_DIALOGUE_TURN_MAX_CHARS", "4096"))
 # Add 动辄数分钟，Search 很短；分池避免长 Add 占满槽位把 Search 挤成 429。
-_add_slots = threading.BoundedSemaphore(int(os.environ.get("AML_MAX_ADD_CONCURRENCY", "8")))
+_add_slots = threading.BoundedSemaphore(int(os.environ.get("AML_MAX_ADD_CONCURRENCY", "64")))
 _search_slots = threading.BoundedSemaphore(
     int(os.environ.get("AML_MAX_SEARCH_CONCURRENCY", "32"))
 )

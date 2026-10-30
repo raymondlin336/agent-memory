@@ -193,10 +193,9 @@ Evaluation data may be used only for the run and must be deleted within 30 days 
 removes every memory, index and the ledger; container logs go with the containers.
 
 Tuning settings (`AML_MAX_ADD_CONCURRENCY`, `AML_MAX_SEARCH_CONCURRENCY`, `AML_ADD_DEADLINE_S`, `AML_DATE_PREFIX`,
-...) are the same as in the local setup and go in `deploy/aml/.env`; see `deploy/aml/README-linux.md`. The default of
-8 Adds at once is low for a full leaderboard run; raise `AML_MAX_ADD_CONCURRENCY` after a capacity test against the
-model APIs' rate limits. A laptop capacity test held about 15 s per exchange from 32 up to 96 Adds at once, so 64 is a
-reasonable starting point. Keep `AML_ES_CONNECTIONS` (Elasticsearch client connections, default 128) above it: each
+...) are the same as in the local setup and go in `deploy/aml/.env`; see `deploy/aml/README-linux.md`. The defaults are 64 Adds and 32 Searches at once. A laptop capacity test held about 15 s
+per exchange from 32 up to 96 Adds at once; change `AML_MAX_ADD_CONCURRENCY` only after a capacity test against the
+model APIs' rate limits. Keep `AML_ES_CONNECTIONS` (Elasticsearch client connections, default 128) above it: each
 Add holds a connection while its write waits for the index refresh, and writers beyond the pool queue in the client.
 For long runs, `ES_HEAP=2g` gives Elasticsearch more room.
 

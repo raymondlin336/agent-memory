@@ -152,7 +152,7 @@ Errors are JSON `{"error": "..."}`:
 | 404 | path other than `/add`, `/search` | no |
 | 409 | the same Add (`user_id` + `request_id`) is still running | Add: yes |
 | 422 | missing or wrong field, e.g. `{"error": "user_id must be a non-empty string"}` | no |
-| 429 | too many Adds (8) or Searches (32) at once; has `Retry-After` | yes |
+| 429 | too many Adds (64) or Searches (32) at once; has `Retry-After` | yes |
 | 500 / 503 | engine or model service failure; 503 also after 25 min in one Add (the retry resumes) | yes |
 
 ## Test one full LongMemEval question end to end
@@ -178,7 +178,7 @@ release) passed with `--data`; a typical question takes 5-12 min and several can
 
 ## Tuning (env, defaults in brackets)
 
-`AML_MAX_ADD_CONCURRENCY` [8], `AML_MAX_SEARCH_CONCURRENCY` [32], `AML_ADD_DEADLINE_S` [1500],
+`AML_MAX_ADD_CONCURRENCY` [64], `AML_MAX_SEARCH_CONCURRENCY` [32], `AML_ADD_DEADLINE_S` [1500],
 `AML_DATE_PREFIX` [1], `AML_OPTIONS_IN_QUERY` [0], `AML_IN_MEMORY` [1 in the start script],
 `AML_LOG_FULL_ERRORS` [0].
 

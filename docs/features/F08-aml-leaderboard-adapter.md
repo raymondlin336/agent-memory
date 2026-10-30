@@ -55,7 +55,7 @@ Agent Memory Leaderboard（AML）Cycle 2 开源赛道要求参赛方托管 HTTP 
 11. **状态码**：字段 / 类型问题 422、非法 JSON 400（均不重试）；引擎 `ValidationError` 422；
     限流 429；引擎授权失败 500 并记 error 日志（不吞成 503）；其余 503（可重试）。此前所有
     `ValueError/TypeError/KeyError` 一律 400，会把引擎内部故障误判为“合约错误”而不被重试。
-12. **并发**：Add 与 Search 分开信号量（默认 8 / 32），避免长 Add 占满槽位把 Search 挤成 429；
+12. **并发**：Add 与 Search 分开信号量（默认 64 / 32），避免长 Add 占满槽位把 Search 挤成 429；
     槽位满回 429 + `Retry-After`。
 13. **鉴权**：`Authorization: <任意 scheme> <key>`（Token / Bearer）或 `X-Api-Key`，任一匹配；
     `AML_ADAPTER_KEY` is required on every address and port (32+ characters, no placeholder keys such as `local-dev-key`); there is no key-free mode. 健康检查任意路径 GET 免鉴权。
