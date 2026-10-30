@@ -16,7 +16,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_DIR="${ROOT}/evaluation/outputs/aml_local"
-PORT=8200
+PORT=""
 BIND_HOST=127.0.0.1
 ENV_FILE=""
 STOP=0
@@ -27,7 +27,7 @@ usage() {
   cat <<'EOF'
 Options:
   --stop                  stop the reranker and adapter started by this script
-  --port N                adapter port (default 8200)
+  --port N                adapter port (default: AML_PORT from env / .env, else 8200)
   --host H                adapter bind address (default 127.0.0.1)
   --rerank-port N         reranker port (default 8906; sets RERANK_BASE_URL to 127.0.0.1:N)
   --api-base URL          OpenAI-compatible LLM endpoint (sets API_BASE)
@@ -129,6 +129,7 @@ else
 fi
 
 # Command-line options win over both.
+PORT="${PORT:-${AML_PORT:-8200}}"
 [[ -n "${OPT_API_BASE}" ]] && export API_BASE="${OPT_API_BASE}"
 [[ -n "${OPT_MODEL}" ]] && export MODEL_NAME="${OPT_MODEL}"
 [[ -n "${OPT_RERANK_PORT}" ]] && export RERANK_BASE_URL="http://127.0.0.1:${OPT_RERANK_PORT}/v1"

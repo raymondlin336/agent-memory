@@ -110,7 +110,7 @@ def main() -> int:
     parser.add_argument("--question-id", required=True)
     parser.add_argument("--data", default="evaluation/datasets/longmemeval/shared40.json")
     parser.add_argument("--env", default="")
-    parser.add_argument("--url", default="http://127.0.0.1:8200")
+    parser.add_argument("--url", default="", help="adapter URL (default: http://127.0.0.1:$AML_PORT, else 8200)")
     parser.add_argument("--top-k", type=int, default=100)
     parser.add_argument("--cutoffs", default="30,10,20,50")
     parser.add_argument("--out", default="")
@@ -127,7 +127,7 @@ def main() -> int:
     items = {e["question_id"]: e for e in json.load(open(args.data, encoding="utf-8"))}
     item = items[args.question_id]
     user_id = f"e2e-{args.question_id}-{uuid.uuid4().hex[:8]}"
-    base = args.url.rstrip("/")
+    base = (args.url or f"http://127.0.0.1:{os.environ.get('AML_PORT') or 8200}").rstrip("/")
 
     chunks = build_chunks(item)
     n_msgs = sum(len(m) for _, m in chunks)
