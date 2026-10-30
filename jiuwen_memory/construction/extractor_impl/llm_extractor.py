@@ -275,6 +275,16 @@ _SOURCE_PREFIX = """\
 
 # 匹配 LLM 误带 [ID: ...] 外壳的 source_id（prompt 已要求裸 uuid，此处为防御性兜底）
 _SOURCE_ID_SHELL_RE = re.compile(r"^\s*\[ID:\s*(?P<id>[^\]]+)\]\s*$", re.IGNORECASE)
+_JSON_BACKSLASH_RE = re.compile(r'\\(u[0-9a-fA-F]{4}|["\\/bfnrt])?')
+
+
+def _escape_invalid_json_backslashes(text: str) -> str:
+    """Double backslashes that do not start a JSON escape, such as LaTeX ``\\alpha``.
+
+    One invalid escape makes the whole reply undecodable, and the parser's scan would then
+    return a nested fragment instead of the full array. Valid JSON is returned unchanged.
+    """
+    return _JSON_BACKSLASH_RE.sub(lambda m: m.group(0) if m.group(1) else "\\\\", text)
 
 # 批量提取的子批大小：把 accepted 拆成若干子批，每子批独立一次 LLM 调用。
 # 单个子批失败与其它子批隔离；仅当整次抽取没有产生任何可用候选时向上抛错，
@@ -722,7 +732,7 @@ class ExtractorImpl(Extractor):
 
     def parse_llm_response(self, response: str) -> list[dict]:
         """从响应中恢复最靠左的非空 JSON 对象或数组。"""
-        cleaned = self._strip_non_json(response)
+        cleaned = _escape_invalid_json_backslashes(self._strip_non_json(response))
         decoder = json.JSONDecoder()
         empty_json_seen = False
         start = 0
